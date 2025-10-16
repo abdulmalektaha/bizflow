@@ -1,23 +1,24 @@
 <?php
+require_once 'config.php'; // يجلب $db_connection
 $message = "";
+
 if (isset($_POST['add_customer'])) {
-    $servername = "localhost";
-    $username = "root";
-    $password = "";
-    $dbname = "bizflow_db";
-    $conn = new mysqli($servername, $username, $password, $dbname);
-    if ($conn->connect_error) { die("فشل الاتصال: " . $conn->connect_error); }
-
-    $full_name = $_POST['full_name'];
-    $telegram_id = $_POST['telegram_id'];
-
-    $sql = "INSERT INTO customers (full_name, telegram_id) VALUES ('$full_name', '$telegram_id')";
-    if ($conn->query($sql) === TRUE) {
+    try {
+        $full_name = $_POST['full_name'];
+        $telegram_id = $_POST['telegram_id'];
+        
+        $sql = "INSERT INTO customers (full_name, telegram_id) VALUES (:full_name, :telegram_id)";
+        $stmt = $db_connection->prepare($sql);
+        
+        $stmt->execute([
+            ':full_name' => $full_name,
+            ':telegram_id' => $telegram_id
+        ]);
+        
         $message = "تمت إضافة العميل بنجاح!";
-    } else {
-        $message = "خطأ: " . $conn->error;
+    } catch (PDOException $e) {
+        $message = "خطأ: " . $e->getMessage();
     }
-    $conn->close();
 }
 ?>
 <!DOCTYPE html>
