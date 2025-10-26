@@ -1,8 +1,5 @@
 <?php
-// -- [أسطر إظهار الأخطاء] --
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
+
 // -- [نهاية الأسطر المضافة] --
 
 require_once 'config.php'; // يجلب $db_connection
@@ -99,3 +96,4 @@ try {
     </div>
 </body>
 </html>
+
