@@ -34,7 +34,9 @@ if (isset($data['message']['text'])) {
     $chat_id = $data['message']['chat']['id'];
     $text = trim($data['message']['text']); // استخدام trim لإزالة المسافات الزائدة
 } else {
-    exit(); // تجاهل الرسائل غير النصية
+    // تجاهل الرسائل غير النصية أو التعديلات
+    // يمكنك إضافة معالجة لأنواع أخرى من الرسائل هنا لاحقًا (مثل Callback Queries للأزرار)
+    exit(); 
 }
 
 // جلب حالة المستخدم وبياناته المؤقتة من قاعدة البيانات
@@ -83,6 +85,7 @@ try {
         // --- حالة انتظار الاسم الأول للعميل ---
         case 'awaiting_customer_first_name':
             if (!empty($text)) {
+                $pending_data = []; // مسح أي بيانات قديمة لهذه العملية
                 $pending_data['first_name'] = $text;
                 updatePendingData($db_connection, $chat_id, $pending_data);
                 updateUserState($db_connection, $chat_id, 'awaiting_customer_last_name');
@@ -96,30 +99,53 @@ try {
         case 'awaiting_customer_last_name':
             if (!empty($text)) {
                 $pending_data['last_name'] = $text;
-                // --- الآن لدينا كل المعلومات لإضافة العميل ---
-                $first_name = $pending_data['first_name'] ?? 'غير معروف';
-                $last_name = $pending_data['last_name'] ?? 'غير معروف';
-                
-                // إضافة العميل إلى قاعدة البيانات
-                $sql = "INSERT INTO customers (first_name, last_name, telegram_chat_id, state) 
-                        VALUES (:first, :last, :chat_id, 'idle') 
-                        ON CONFLICT (telegram_chat_id) DO UPDATE SET 
-                        first_name = EXCLUDED.first_name, 
-                        last_name = EXCLUDED.last_name, 
-                        state = 'idle'"; // استخدام ON CONFLICT للتعامل مع العملاء الموجودين
-                $stmt = $db_connection->prepare($sql);
-                $stmt->execute(['first' => $first_name, 'last' => $last_name, 'chat_id' => $chat_id]);
-                
-                // حذف البيانات المؤقتة
-                clearPendingData($db_connection, $chat_id);
-                // (الحالة تم تحديثها إلى idle في جملة INSERT/UPDATE)
-
-                sendMessage($chat_id, "✅ تم إضافة/تحديث العميل '$first_name $last_name' بنجاح!");
-
+                updatePendingData($db_connection, $chat_id, $pending_data);
+                updateUserState($db_connection, $chat_id, 'awaiting_customer_email'); // <-- [تغيير هنا] ننتقل لسؤال البريد الإلكتروني
+                sendMessage($chat_id, "📧 ممتاز. أخيرًا، من فضلك أدخل البريد الإلكتروني للعميل (أو اكتب 'تخطي' إذا لم يكن متوفرًا):"); // <-- [تغيير هنا]
             } else {
                 sendMessage($chat_id, "❌ الاسم الأخير لا يمكن أن يكون فارغًا. من فضلك أعد إدخاله.");
             }
             break;
+            
+        // --- [جديد] حالة انتظار البريد الإلكتروني للعميل ---
+        case 'awaiting_customer_email':
+             $email = null; // القيمة الافتراضية
+            if (!empty($text) && mb_strtolower($text) != 'تخطي') {
+                // التحقق من صحة صيغة البريد الإلكتروني (بسيط)
+                if (filter_var($text, FILTER_VALIDATE_EMAIL)) {
+                    $email = $text;
+                } else {
+                    sendMessage($chat_id, "⚠️ صيغة البريد الإلكتروني غير صحيحة. من فضلك أعد إدخاله بشكل صحيح (مثل user@example.com) أو اكتب 'تخطي'.");
+                    break; // ابق في نفس الحالة وانتظر إدخالاً صحيحًا
+                }
+            } // إذا كتب 'تخطي' أو لم يكتب شيئًا، ستبقى $email = null
+
+            // --- الآن لدينا كل المعلومات لإضافة/تحديث العميل ---
+            $first_name = $pending_data['first_name'] ?? 'غير معروف';
+            $last_name = $pending_data['last_name'] ?? 'غير معروف';
+            
+            // إضافة/تحديث العميل في قاعدة البيانات
+            $sql = "INSERT INTO customers (first_name, last_name, telegram_chat_id, email, state) 
+                    VALUES (:first, :last, :chat_id, :email, 'idle') 
+                    ON CONFLICT (telegram_chat_id) DO UPDATE SET 
+                    first_name = EXCLUDED.first_name, 
+                    last_name = EXCLUDED.last_name, 
+                    email = EXCLUDED.email,
+                    state = 'idle'"; // استخدام ON CONFLICT للتعامل مع العملاء الموجودين وتحديث بياناتهم وحالتهم
+            $stmt = $db_connection->prepare($sql);
+            $stmt->execute([
+                'first' => $first_name, 
+                'last' => $last_name, 
+                'chat_id' => $chat_id,
+                'email' => $email // يمكن أن تكون null إذا قام بالتخطي
+            ]);
+            
+            // حذف البيانات المؤقتة
+            clearPendingData($db_connection, $chat_id);
+            // (الحالة تم تحديثها إلى idle في جملة INSERT/UPDATE)
+
+            sendMessage($chat_id, "✅ تم إضافة/تحديث العميل '$first_name $last_name' بنجاح!");
+            break; // نهاية حالة awaiting_customer_email
             
         // --- [أضف هنا حالات أخرى مثل awaiting_invoice_amount, awaiting_invoice_customer] ---    
             
@@ -140,8 +166,8 @@ try {
                      // يمكن إضافة حالة 'awaiting_update_decision' هنا
                  } else {
                     // ابدأ عملية إضافة العميل
-                    // Ensure customer record exists before updating state
-                     ensureCustomerRecord($db_connection, $chat_id); 
+                    // Ensure customer record exists before updating state (Though technically done by ensureCustomerRecord now)
+                    ensureCustomerRecord($db_connection, $chat_id); // تأكد من وجود سجل ولو فارغ
                     updateUserState($db_connection, $chat_id, 'awaiting_customer_first_name');
                     clearPendingData($db_connection, $chat_id); // مسح أي بيانات قديمة
                     sendMessage($chat_id, "📝 حسنًا، لنبدأ بإضافة عميل جديد. من فضلك أدخل الاسم الأول للعميل:");
@@ -207,7 +233,7 @@ function sendMessage($chat_id, $message) {
         $data = [
             'chat_id' => $chat_id,
             'text' => $message,
-            'parse_mode' => 'HTML' 
+            'parse_mode' => 'HTML' // يسمح باستخدام بعض تنسيقات HTML البسيطة مثل <b> و <i>
         ];
         
         $options = [
@@ -215,21 +241,21 @@ function sendMessage($chat_id, $message) {
                 'method'  => 'POST',
                 'header'  => "Content-Type: application/x-www-form-urlencoded\r\n",
                 'content' => http_build_query($data),
-                'ignore_errors' => true 
+                'ignore_errors' => true // مهم حتى نتمكن من تسجيل الأخطاء إذا فشل الإرسال
             ],
-            'ssl' => [ // [إضافة] قد تحتاج هذه الخيارات إذا كان هناك مشاكل SSL
+             'ssl' => [ // قد تحتاج هذه الخيارات إذا كان هناك مشاكل SSL على السيرفر
                  'verify_peer' => false,
                  'verify_peer_name' => false,
             ]
         ];
         $context  = stream_context_create($options);
-        $result = @file_get_contents($url, false, $context);
+        $result = @file_get_contents($url, false, $context); // استخدام @ لمنع ظهور أخطاء PHP مباشرة
 
-        // [إضافة] تسجيل إذا فشل الإرسال
+        // تسجيل إذا فشل الإرسال أو إذا لم تكن الاستجابة 200 OK
         if ($result === FALSE) {
-            error_log("sendMessage failed to chat_id: $chat_id. URL: $url");
+            error_log("sendMessage failed to chat_id: $chat_id. Could not connect or read from URL: $url");
         } elseif (isset($http_response_header) && strpos($http_response_header[0], '200 OK') === false) {
-             error_log("sendMessage returned non-200 status for chat_id: $chat_id. Response: $result");
+             error_log("sendMessage returned non-200 status for chat_id: $chat_id. Status: {$http_response_header[0]}. Response: $result");
         }
 
     } catch (Throwable $t) {
@@ -238,7 +264,8 @@ function sendMessage($chat_id, $message) {
 }
 
 /**
- * ينشئ سجل عميل إذا لم يكن موجودًا (ضروري لتحديث الحالة).
+ * ينشئ سجل عميل إذا لم يكن موجودًا (ضروري لتحديث الحالة أو البيانات المؤقتة).
+ * يستخدم ON CONFLICT لتجنب الأخطاء إذا كان المستخدم موجودًا بالفعل.
  */
 function ensureCustomerRecord($db, $chat_id) {
     try {
@@ -249,41 +276,54 @@ function ensureCustomerRecord($db, $chat_id) {
         $stmt->execute(['chat_id' => $chat_id]);
     } catch (PDOException $e) {
          error_log("ensureCustomerRecord failed for chat_id $chat_id: " . $e->getMessage());
+         // Consider if we should throw or handle this differently
     }
 }
 
 
 /**
  * يحدث حالة المستخدم في جدول customers.
- * !!! يفترض أن العميل موجود الآن !!!
+ * !!! يتطلب أن يكون سجل العميل موجودًا (يتم ضمانه بواسطة ensureCustomerRecord) !!!
  */
 function updateUserState($db, $chat_id, $new_state) {
     try {
+        // Ensure record exists before attempting update
+        ensureCustomerRecord($db, $chat_id); 
+        
         $stmt = $db->prepare("UPDATE customers SET state = :state WHERE telegram_chat_id = :chat_id");
         $stmt->execute(['state' => $new_state, 'chat_id' => $chat_id]);
     } catch (PDOException $e) {
         error_log("updateUserState failed for chat_id $chat_id: " . $e->getMessage());
+        // Consider sending an error message to the user or admin
     }
 }
 
 /**
  * يحفظ أو يحدث البيانات المؤقتة للمستخدم في جدول pending_data.
+ * يستخدم ON CONFLICT لتجنب الأخطاء إذا كان المستخدم لديه بيانات مؤقتة بالفعل.
  */
 function updatePendingData($db, $chat_id, $data_array) {
     try {
         $json_data = json_encode($data_array);
-        // تأكد من وجود العميل أولاً قبل محاولة الإضافة أو التحديث
+        if ($json_data === false) {
+             error_log("updatePendingData failed for chat_id $chat_id: Failed to encode data to JSON.");
+             return; // لا يمكن المتابعة إذا فشل الترميز
+        }
+        
+        // تأكد من وجود العميل أولاً قبل محاولة الإضافة أو التحديث في pending_data
         ensureCustomerRecord($db, $chat_id); 
+        
         $stmt = $db->prepare("INSERT INTO pending_data (telegram_chat_id, data) VALUES (:chat_id, :data) 
                                 ON CONFLICT (telegram_chat_id) DO UPDATE SET data = EXCLUDED.data");
         $stmt->execute(['chat_id' => $chat_id, 'data' => $json_data]);
     } catch (PDOException $e) {
         error_log("updatePendingData failed for chat_id $chat_id: " . $e->getMessage());
+        // Consider sending an error message to the user or admin
     }
 }
 
 /**
- * يحذف البيانات المؤقتة للمستخدم من جدول pending_data.
+ * يحذف البيانات المؤقتة للمستخدم من جدول pending_data (عند إكمال أو إلغاء عملية).
  */
 function clearPendingData($db, $chat_id) {
      try {
@@ -291,6 +331,7 @@ function clearPendingData($db, $chat_id) {
         $stmt->execute(['chat_id' => $chat_id]);
     } catch (PDOException $e) {
         error_log("clearPendingData failed for chat_id $chat_id: " . $e->getMessage());
+        // This is less critical, but should be logged
     }
 }
 
