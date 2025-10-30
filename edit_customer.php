@@ -1,78 +1,99 @@
 <?php
-// جلب الإعدادات والاتصال بقاعدة البيانات
-require_once 'config.php';
+// [1. بدء الجلسة والاتصال]
+require_once 'config.php'; // سيقوم ببدء الجلسة session_start()
 
-$customer_id = null;
-$customer = null;
-$error_message = null;
-$success_message = null;
-
-// 1. التحقق من وجود ID في الرابط
-if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
-    // إذا لم يكن هناك ID، أعد التوجيه إلى صفحة العملاء
-    header("Location: customers.php");
+// [2. حارس الأمان (Authentication Guard)]
+// التحقق مما إذا كان المستخدم مسجلاً دخوله
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
     exit();
 }
-$customer_id = intval($_GET['id']);
 
-try {
-    if (!$db_connection) {
-        throw new Exception("خطأ فادح: لم يتم تأسيس الاتصال بقاعدة البيانات.");
-    }
+// [3. جلب بيانات المستخدم الحالي من الجلسة]
+$current_user_id = $_SESSION['user_id'];
+$current_company_name = $_SESSION['company_name'] ?? 'شركتي';
+$customer_id = $_GET['id'] ?? null;
 
-    // 2. التعامل مع نموذج التعديل (عندما يضغط المستخدم "حفظ التغييرات")
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        // استقبال البيانات من النموذج
-        $first_name = trim($_POST['first_name'] ?? '');
-        $last_name = trim($_POST['last_name'] ?? '');
-        $email = trim($_POST['email'] ?? '');
+// [4. معالجة إرسال النموذج (POST Request) - التحديث]
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // جلب البيانات من النموذج
+    $customer_id_post = $_POST['customer_id'] ?? null;
+    $first_name = trim($_POST['first_name'] ?? '');
+    $last_name = trim($_POST['last_name'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $telegram_chat_id = trim($_POST['telegram_chat_id'] ?? '');
 
-        // التحقق من البيانات (أساسي)
-        if (empty($first_name) || empty($last_name)) {
-            $error_message = "الاسم الأول والأخير حقول إلزامية.";
-        } elseif (!empty($email) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $error_message = "صيغة البريد الإلكتروني غير صحيحة.";
-        } else {
-            // تنفيذ أمر التحديث
-            $sql = "UPDATE customers SET 
-                        first_name = :first_name, 
+    // التحقق من أن البيانات الأساسية موجودة
+    if ($customer_id_post && $first_name && $last_name) {
+        try {
+            // [تحديث الأمان]
+            // قم بالتحديث فقط إذا كان customer_id و user_id يتطابقان
+            // هذا يمنع المستخدم من تعديل عملاء لا يملكهم
+            $sql = "UPDATE customers 
+                    SET first_name = :first_name, 
                         last_name = :last_name, 
-                        email = :email 
-                    WHERE customer_id = :customer_id";
+                        email = :email, 
+                        telegram_chat_id = :telegram_chat_id
+                    WHERE customer_id = :customer_id AND user_id = :user_id";
+            
             $stmt = $db_connection->prepare($sql);
             $stmt->execute([
                 'first_name' => $first_name,
                 'last_name' => $last_name,
-                'email' => (empty($email) ? null : $email), // السماح بقيمة فارغة
-                'customer_id' => $customer_id
+                'email' => $email ?: null, // السماح بقيمة فارغة
+                'telegram_chat_id' => $telegram_chat_id ?: null, // السماح بقيمة فارغة
+                'customer_id' => $customer_id_post,
+                'user_id' => $current_user_id
             ]);
 
-            // إرسال رسالة نجاح وإعادة التوجيه إلى صفحة العملاء
-            session_start();
-            $_SESSION['success_message'] = "تم تحديث بيانات العميل (ID: $customer_id) بنجاح!";
-            session_write_close();
+            // التحقق مما إذا كان أي صف قد تأثر
+            if ($stmt->rowCount() > 0) {
+                $_SESSION['success_message'] = "تم تحديث بيانات العميل بنجاح!";
+            } else {
+                $_SESSION['error_message'] = "لم يتم إجراء أي تغييرات أو أن العميل غير موجود.";
+            }
+            header("Location: customers.php");
+            exit();
+
+        } catch (PDOException $e) {
+            logError("edit_customer.php (POST) - PDOException: " . $e->getMessage());
+            $error_message = "حدث خطأ في قاعدة البيانات أثناء التحديث.";
+            // البقاء في الصفحة لعرض رسالة الخطأ
+        }
+    } else {
+        $error_message = "يرجى ملء جميع الحقول المطلوبة (الاسم الأول والأخير).";
+    }
+}
+
+// [5. جلب بيانات العميل للعرض (GET Request)]
+// إذا لم يكن طلب POST، أو إذا فشل التحقق من POST
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    if (!$customer_id) {
+        $_SESSION['error_message'] = "لم يتم تحديد معرف العميل.";
+        header("Location: customers.php");
+        exit();
+    }
+
+    try {
+        // [تحديث الأمان]
+        // قم بالجلب فقط إذا كان customer_id و user_id يتطابقان
+        $sql = "SELECT * FROM customers WHERE customer_id = :id AND user_id = :user_id";
+        $stmt = $db_connection->prepare($sql);
+        $stmt->execute(['id' => $customer_id, 'user_id' => $current_user_id]);
+        $customer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // إذا لم يتم العثور على العميل (أو لا ينتمي للمستخدم)، أعد التوجيه
+        if (!$customer) {
+            $_SESSION['error_message'] = "خطأ: العميل غير موجود أو لا يمكنك الوصول إليه.";
             header("Location: customers.php");
             exit();
         }
+    } catch (PDOException $e) {
+        logError("edit_customer.php (GET) - PDOException: " . $e->getMessage());
+        $_SESSION['error_message'] = "حدث خطأ أثناء جلب بيانات العميل.";
+        header("Location: customers.php");
+        exit();
     }
-
-    // 3. جلب بيانات العميل الحالية لعرضها في النموذج (GET request)
-    $stmt = $db_connection->prepare("SELECT * FROM customers WHERE customer_id = :id");
-    $stmt->execute(['id' => $customer_id]);
-    $customer = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    // إذا كان العميل غير موجود
-    if (!$customer) {
-        $error_message = "العميل بالرقم $customer_id غير موجود.";
-        $customer = null; // ضمان عدم عرض النموذج
-    }
-
-} catch (PDOException $e) {
-    $error_message = "حدث خطأ أثناء التعامل مع قاعدة البيانات.";
-    error_log("edit_customer.php - PDOException: " . $e->getMessage());
-} catch (Exception $e) {
-    $error_message = $e->getMessage();
-    error_log("edit_customer.php - General Exception: " . $e->getMessage());
 }
 ?>
 <!DOCTYPE html>
@@ -81,90 +102,57 @@ try {
     <meta charset="UTF-8">
     <title>تعديل العميل - BizFlow</title>
     <link rel="stylesheet" href="style.css">
-    <style>
-        body { font-family: 'Tahoma', sans-serif; background-color: #f4f7f6; margin: 0; padding: 0; }
-        .container { max-width: 600px; margin: 20px auto; padding: 20px; background: #fff; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; }
-        .error-message { color: red; text-align: center; margin-top: 15px; border: 1px solid red; padding: 10px; border-radius: 4px; background-color: #ffebeb; }
-        .nav-link { display: inline-block; margin-bottom: 15px; padding: 8px 15px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 4px; }
-        .nav-link:hover { background-color: #5a6268; }
-        
-        /* تنسيق النموذج */
-        .form-group {
-            margin-bottom: 15px;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-        }
-        .form-group input {
-            width: 95%; /* 100% مع الأخذ بعين الاعتبار padding */
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        .form-group input[readonly] { /* جعل ID غير قابل للتعديل */
-            background-color: #eee;
-            cursor: not-allowed;
-        }
-        .submit-btn {
-            display: block;
-            width: 100%;
-            padding: 12px;
-            background-color: #28a745; /* أخضر */
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        .submit-btn:hover {
-            background-color: #218838;
-        }
-    </style>
 </head>
 <body>
     <div class="container">
-        <a href="customers.php" class="nav-link">العودة إلى قائمة العملاء</a>
-        <hr>
-        <h1>تعديل بيانات العميل</h1>
+        
+        <!-- شريط التنقل العلوي -->
+        <div class="header-nav">
+            <h1>لوحة تحكم <?php echo htmlspecialchars($current_company_name); ?> - تعديل العميل</h1>
+            <div>
+                <a href="index.php" class="nav-link">عرض الفواتير</a>
+                <a href="customers.php" class="nav-link active">عرض العملاء</a>
+                <a href="logout.php" class="nav-link logout-btn">تسجيل الخروج</a>
+            </div>
+        </div>
 
-        <?php if ($error_message): ?>
-            <p class="error-message"><?php echo htmlspecialchars($error_message); ?></p>
+        <!-- عرض رسائل الخطأ (إذا حدث خطأ أثناء POST) -->
+        <?php if (!empty($error_message)): ?>
+            <p class="message error-message"><?php echo htmlspecialchars($error_message); ?></p>
         <?php endif; ?>
 
-        <?php if ($customer): // لا تعرض النموذج إذا لم يتم العثور على العميل ?>
-        <form method="POST">
-            <div class="form-group">
-                <label for="customer_id">رقم العميل (ID)</label>
-                <input type="text" id="customer_id" name="customer_id" value="<?php echo htmlspecialchars($customer['customer_id']); ?>" readonly>
-            </div>
+        <!-- نموذج تعديل العميل -->
+        <form action="edit_customer.php?id=<?php echo htmlspecialchars($customer_id); ?>" method="post" class="data-form">
+            <!-- إخفاء حقل ID العميل لإرساله مع النموذج -->
+            <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars($customer['customer_id']); ?>">
             
             <div class="form-group">
-                <label for="first_name">الاسم الأول</label>
-                <input type="text" id="first_name" name="first_name" value="<?php echo htmlspecialchars($customer['first_name']); ?>" required>
+                <label for="first_name">الاسم الأول (مطلوب):</label>
+                <input type="text" id="first_name" name="first_name" value="<?php echo htmlspecialchars($customer['first_name'] ?? ''); ?>" required>
             </div>
             
             <div class="form-group">
-                <label for="last_name">الاسم الأخير</label>
-                <input type="text" id="last_name" name="last_name" value="<?php echo htmlspecialchars($customer['last_name']); ?>" required>
+                <label for="last_name">الاسم الأخير (مطلوب):</label>
+                <input type="text" id="last_name" name="last_name" value="<?php echo htmlspecialchars($customer['last_name'] ?? ''); ?>" required>
             </div>
             
             <div class="form-group">
-                <label for="email">البريد الإلكتروني</label>
-                <input type="email" id="email" name="email" value="<?php echo htmlspecialchars($customer['email']); ?>">
+                <label for="email">البريد الإلكتروني:</label>
+                <input type="email" id="email" name="email" value="<?php echo htmlspecialchars($customer['email'] ?? ''); ?>">
             </div>
             
-             <div class="form-group">
-                <label for="telegram_chat_id">معرف تيليجرام</label>
-                <input type="text" id="telegram_chat_id" name="telegram_chat_id" value="<?php echo htmlspecialchars($customer['telegram_chat_id']); ?>" readonly>
+            <div class="form-group">
+                <label for="telegram_chat_id">معرف تيليجرام:</label>
+                <input type="text" id="telegram_chat_id" name="telegram_chat_id" value="<?php echo htmlspecialchars($customer['telegram_chat_id'] ?? ''); ?>">
             </div>
             
-            <button type="submit" class="submit-btn">حفظ التغييرات</button>
+            <div class="form-actions">
+                <button type="submit" class="button button-primary">حفظ التغييرات</button>
+                <a href="customers.php" class="button button-secondary">إلغاء</a>
+            </div>
         </form>
-        <?php endif; ?>
 
     </div>
 </body>
 </html>
+
