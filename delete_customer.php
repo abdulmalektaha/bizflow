@@ -1,69 +1,63 @@
 <?php
-// جلب الإعدادات والاتصال بقاعدة البيانات
-require_once 'config.php';
+// [1. بدء الجلسة والاتصال]
+require_once 'config.php'; // سيقوم ببدء الجلسة session_start()
 
-$customer_id = null;
-$error_redirect = "customers.php?error=unknown"; // رسالة خطأ افتراضية
+// [2. حارس الأمان (Authentication Guard)]
+// التحقق مما إذا كان المستخدم مسجلاً دخوله
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit();
+}
 
-// 1. التحقق من وجود ID في الرابط
-if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
+// [3. جلب بيانات المستخدم الحالي من الجلسة]
+$current_user_id = $_SESSION['user_id'];
+$customer_id = $_GET['id'] ?? null;
+
+// [4. التحقق من وجود ID العميل]
+if (empty($customer_id)) {
+    $_SESSION['error_message'] = "خطأ: لم يتم تحديد معرف العميل.";
     header("Location: customers.php");
     exit();
 }
-$customer_id = intval($_GET['id']);
 
+// [5. محاولة الحذف]
 try {
-    if (!$db_connection) {
-        throw new Exception("خطأ فادح: لم يتم تأسيس الاتصال بقاعدة البيانات.");
-    }
-
-    // 2. محاولة حذف العميل
-    // ملاحظة: لقد قمنا بربط جدول invoices بـ customers (FOREIGN KEY)
-    // هذا يعني أن PostgreSQL لن يسمح بحذف عميل إذا كان لديه فواتير (وهذا جيد!)
-    // سنلتقط هذا الخطأ المحدد ونرسل رسالة واضحة.
+    // [تحديث الأمان]
+    // قم بالحذف فقط إذا كان customer_id و user_id يتطابقان
+    // هذا يمنع المستخدم من حذف عملاء لا يملكهم
+    $sql = "DELETE FROM customers 
+            WHERE customer_id = :customer_id AND user_id = :user_id";
     
-    $sql = "DELETE FROM customers WHERE customer_id = :id";
     $stmt = $db_connection->prepare($sql);
-    $stmt->execute(['id' => $customer_id]);
+    $stmt->execute([
+        'customer_id' => $customer_id,
+        'user_id' => $current_user_id
+    ]);
 
-    // 3. التحقق مما إذا كان الحذف قد تم بالفعل
+    // التحقق مما إذا كان أي صف قد تأثر
     if ($stmt->rowCount() > 0) {
-        // نجح الحذف
-        session_start();
-        $_SESSION['success_message'] = "تم حذف العميل (ID: $customer_id) بنجاح.";
-        session_write_close();
-        header("Location: customers.php");
-        exit();
+        // تم الحذف بنجاح
+        $_SESSION['success_message'] = "تم حذف العميل بنجاح!";
     } else {
-        // لم يتم العثور على العميل لحذفه
-        header("Location: customers.php?error=notfound");
-        exit();
+        // لم يتم الحذف (إما أن العميل غير موجود أو لا ينتمي للمستخدم)
+        $_SESSION['error_message'] = "خطأ: لا يمكن العثور على العميل أو لا تملك الصلاحية لحذفه.";
     }
 
 } catch (PDOException $e) {
-    // 4. التقاط الأخطاء، خاصة خطأ المفتاح الخارجي (Foreign Key)
-    
-    $error_code = $e->getCode();
-    
-    // SQLSTATE[23503] هو الرمز القياسي لـ Foreign Key Violation
-    if ($error_code == "23503") {
-        // لا يمكن الحذف، العميل مرتبط بفواتير
-        $error_redirect = "customers.php?error=has_invoices";
+    // [معالجة خطأ المفتاح الخارجي (الأهم)]
+    // إذا كان العميل مرتبطًا بفواتير، ستمنع قاعدة البيانات الحذف
+    if ($e->getCode() == '23503') { 
+        $_SESSION['error_message'] = "خطأ: لا يمكن حذف العميل لأنه مرتبط بفواتير موجودة.";
     } else {
         // خطأ آخر في قاعدة البيانات
-        error_log("delete_customer.php - PDOException: " . $e->getMessage());
-        $error_redirect = "customers.php?error=db_error";
+        logError("delete_customer.php - PDOException: " . $e->getMessage());
+        $_SESSION['error_message'] = "حدث خطأ في قاعدة البيانات أثناء محاولة الحذف.";
     }
-    
-    session_start();
-    $_SESSION['error_message'] = "فشل حذف العميل. (Code: $error_code)"; // يمكننا تحسين الرسالة هنا
-    session_write_close();
-    header("Location: " . $error_redirect);
-    exit();
-
-} catch (Exception $e) {
-    error_log("delete_customer.php - General Exception: " . $e->getMessage());
-    header("Location: " . $error_redirect);
-    exit();
 }
+
+// [6. إعادة التوجيه]
+// العودة دائمًا إلى صفحة قائمة العملاء
+header("Location: customers.php");
+exit();
+
 ?>
