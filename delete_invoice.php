@@ -1,54 +1,57 @@
 <?php
-// [1. بدء الجلسة]
-// يجب أن يكون هذا أول شيء في الملف
-session_start();
+// [1. بدء الجلسة والاتصال]
+require_once 'config.php'; // سيقوم ببدء الجلسة session_start()
 
-// [2. جلب الإعدادات والاتصال]
-require_once 'config.php';
+// [2. حارس الأمان (Authentication Guard)]
+// التحقق مما إذا كان المستخدم مسجلاً دخوله
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit();
+}
 
-$invoice_id = null;
-$error_message = null;
-$success_message = null;
+// [3. جلب بيانات المستخدم الحالي من الجلسة]
+$current_user_id = $_SESSION['user_id'];
+$invoice_id = $_GET['id'] ?? null;
 
+// [4. التحقق من وجود ID الفاتورة]
+if (empty($invoice_id)) {
+    $_SESSION['error_message'] = "خطأ: لم يتم تحديد معرف الفاتورة.";
+    header("Location: index.php");
+    exit();
+}
+
+// [5. محاولة الحذف]
 try {
-    // [3. التحقق من وجود ID في الرابط وأنه رقم صحيح]
-    if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
-        throw new Exception("رقم الفاتورة غير صالح أو مفقود.");
-    }
-    $invoice_id = intval($_GET['id']);
-
-    if (!$db_connection) {
-        throw new Exception("خطأ فادح: لم يتم تأسيس الاتصال بقاعدة البيانات.");
-    }
-
-    // [4. تجهيز وتنفيذ أمر الحذف]
-    $sql = "DELETE FROM invoices WHERE invoice_id = :id";
+    // [تحديث الأمان]
+    // قم بالحذف فقط إذا كانت الفاتورة تنتمي للمستخدم الحالي
+    $sql = "DELETE FROM invoices 
+            WHERE invoice_id = :invoice_id AND user_id = :user_id";
+    
     $stmt = $db_connection->prepare($sql);
-    $stmt->execute(['id' => $invoice_id]);
+    $stmt->execute([
+        'invoice_id' => $invoice_id,
+        'user_id' => $current_user_id
+    ]);
 
-    // [5. التحقق مما إذا كان الحذف قد تم بالفعل]
+    // التحقق مما إذا كان أي صف قد تأثر
     if ($stmt->rowCount() > 0) {
-        // إذا نجح الحذف (تم العثور على الصف وحذفه)
-        $_SESSION['success_message'] = "تم حذف الفاتورة (ID: $invoice_id) بنجاح!";
+        // تم الحذف بنجاح
+        $_SESSION['success_message'] = "تم حذف الفاتورة بنجاح!";
     } else {
-        // إذا لم يتم العثور على الفاتورة (ربما تم حذفها بالفعل)
-        throw new Exception("لم يتم العثور على الفاتورة (ID: $invoice_id) لحذفها.");
+        // لم يتم الحذف (إما أن الفاتورة غير موجودة أو لا تنتمي للمستخدم)
+        $_SESSION['error_message'] = "خطأ: لا يمكن العثور على الفاتورة أو لا تملك الصلاحية لحذفها.";
     }
 
 } catch (PDOException $e) {
-    // [6. معالجة أخطاء قاعدة البيانات]
-    // (هنا لا نتوقع خطأ مفتاح خارجي، لأن الفاتورة لا تمنع حذف شيء آخر)
+    // معالجة أي أخطاء أخرى في قاعدة البيانات
+    logError("delete_invoice.php - PDOException: " . $e->getMessage());
     $_SESSION['error_message'] = "حدث خطأ في قاعدة البيانات أثناء محاولة الحذف.";
-    error_log("delete_invoice.php - PDOException: " . $e->getMessage());
-} catch (Exception $e) {
-    // [7. معالجة الأخطاء العامة]
-    $_SESSION['error_message'] = $e->getMessage();
-    error_log("delete_invoice.php - General Exception: " . $e->getMessage());
 }
 
-// [8. إعادة التوجيه إلى صفحة الفواتير الرئيسية]
-// سيقوم index.php بقراءة رسالة النجاح أو الخطأ من الجلسة
+// [6. إعادة التوجيه]
+// العودة دائمًا إلى صفحة قائمة الفواتير
 header("Location: index.php");
 exit();
 
 ?>
+
