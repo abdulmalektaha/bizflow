@@ -1,173 +1,127 @@
 <?php
-// [1. بدء الجلسة]
-// يجب أن يكون هذا أول شيء في الملف
-session_start();
+// [1. بدء الجلسة والاتصال]
+// يجب أن يكون session_start() في config.php هو السطر الأول
+require_once 'config.php'; 
 
-// [2. جلب الإعدادات والاتصال]
-require_once 'config.php';
+// [2. حارس الأمان (Authentication Guard)]
+// التحقق مما إذا كان المستخدم مسجلاً دخوله
+if (!isset($_SESSION['user_id'])) {
+    // إذا لم يكن مسجلاً دخوله، أعد توجيهه إلى صفحة تسجيل الدخول
+    header("Location: login.php");
+    exit();
+}
 
+// [3. جلب بيانات المستخدم الحالي من الجلسة]
+$current_user_id = $_SESSION['user_id'];
+$current_company_name = $_SESSION['company_name'] ?? 'BizFlow'; // اسم افتراضي
+
+// [4. جلب رسائل الحالة (Success/Error Messages) من الجلسة]
+$success_message = $_SESSION['success_message'] ?? null;
+$error_message = $_SESSION['error_message'] ?? null;
+// مسح الرسائل بعد عرضها لمنع ظهورها مرة أخرى عند تحديث الصفحة
+unset($_SESSION['success_message']);
+unset($_SESSION['error_message']);
+
+// [5. جلب الفواتير (المصفاة) الخاصة بهذا المستخدم فقط]
 $invoices = [];
-$error_message = null;
-$success_message = null;
-
-// [3. [جديد] التحقق من رسائل الحالة القادمة من الجلسة]
-// نقرأها ونحذفها فورًا حتى لا تظهر مرة أخرى
-if (isset($_SESSION['success_message'])) {
-    $success_message = $_SESSION['success_message'];
-    unset($_SESSION['success_message']); // حذف الرسالة بعد عرضها
-}
-if (isset($_SESSION['error_message'])) {
-    $error_message = $_SESSION['error_message'];
-    unset($_SESSION['error_message']); // حذف الرسالة بعد عرضها
-}
-
-
 try {
-    if (!$db_connection) {
-         throw new Exception("خطأ فادح: لم يتم تأسيس الاتصال بقاعدة البيانات.");
-    }
-    
-    // [4. معالجة الإجراءات السريعة (تحديث الحالة)]
-    // (هذا هو الكود القديم لتحديد كمدفوعة)
-    if (isset($_GET['action']) && $_GET['action'] == 'mark_paid' && isset($_GET['id'])) {
-        $invoice_id_to_update = intval($_GET['id']);
-        
-        $update_sql = "UPDATE invoices SET status = 'paid' WHERE invoice_id = :id";
-        $stmt = $db_connection->prepare($update_sql);
-        $stmt->execute(['id' => $invoice_id_to_update]);
-        
-        // [تعديل] استخدام رسالة نجاح بدلاً من إعادة التحميل الفورية
-        $success_message = "تم تحديث حالة الفاتورة (ID: $invoice_id_to_update) إلى 'مدفوعة' بنجاح!";
-        // ملاحظة: من الأفضل إعادة التوجيه لتجنب إعادة إرسال النموذج،
-        // ولكن للتبسيط سنكتفي بعرض الرسالة
-        // header("Location: index.php?status=marked_paid"); // خيار أفضل
-    }
-
-    // [5. جلب بيانات الفواتير لعرضها]
+    // [تحديث الأمان]
+    // اختر فقط الفواتير التي يملكها المستخدم الحالي (user_id)
     $sql = "SELECT i.invoice_id, i.amount, i.status, i.due_date, c.first_name, c.last_name
             FROM invoices AS i
             JOIN customers AS c ON i.customer_id = c.customer_id
+            WHERE i.user_id = :user_id 
             ORDER BY i.creation_date DESC";
-    $stmt = $db_connection->query($sql);
+    $stmt = $db_connection->prepare($sql);
+    $stmt->execute(['user_id' => $current_user_id]);
     $invoices = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 } catch (PDOException $e) {
-    $error_message = "حدث خطأ أثناء الاتصال أو جلب البيانات من قاعدة البيانات.";
-    error_log("index.php - PDOException: " . $e->getMessage());
-} catch (Exception $e) {
-    $error_message = $e->getMessage();
-    error_log("index.php - General Exception: " . $e->getMessage());
+    // تسجيل الخطأ بدلاً من عرضه للمستخدم
+    logError("index.php - PDOException: " . $e->getMessage());
+    $error_message = "حدث خطأ أثناء جلب الفواتير. يرجى المحاولة لاحقًا.";
 }
-session_write_close(); // إغلاق الجلسة بعد الانتهاء
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>لوحة تحكم BizFlow - الفواتير</title>
+    <!-- [تحديث] استخدام اسم الشركة الديناميكي في العنوان -->
+    <title>لوحة التحكم - <?php echo htmlspecialchars($current_company_name); ?></title>
     <link rel="stylesheet" href="style.css">
-    <style>
-        body { font-family: 'Tahoma', sans-serif; background-color: #f4f7f6; margin: 0; padding: 0; }
-        .container { max-width: 1000px; margin: 20px auto; padding: 20px; background: #fff; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { padding: 12px; border: 1px solid #ddd; text-align: right; }
-        th { background-color: #f2f2f2; }
-        
-        /* رسائل الحالة */
-        .error-message { color: red; text-align: center; margin-top: 15px; border: 1px solid red; padding: 10px; border-radius: 4px; background-color: #ffebeb; }
-        .success-message { color: green; text-align: center; margin-top: 15px; border: 1px solid green; padding: 10px; border-radius: 4px; background-color: #e6ffec; }
-        
-        /* روابط التنقل */
-        .nav-link { display: inline-block; margin-bottom: 15px; padding: 8px 15px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; }
-        .nav-link:hover { background-color: #0056b3; }
-        
-        /* تنسيق حالة الفاتورة */
-        .status-paid { color: #28a745; font-weight: bold; } /* أخضر */
-        .status-pending { color: #fd7e14; font-weight: bold; } /* برتقالي */
-        
-        /* [جديد] تنسيق روابط الإجراءات */
-        .action-link { 
-            color: #007bff; /* أزرق */
-            text-decoration: none; 
-            margin-left: 10px;
-        }
-        .action-link:hover { text-decoration: underline; }
-        
-        .action-link-edit {
-            color: #ffc107; /* أصفر */
-            margin-left: 10px;
-            text-decoration: none;
-        }
-        .action-link-edit:hover { text-decoration: underline; }
-        
-        .action-link-delete {
-            color: #dc3545; /* أحمر */
-            text-decoration: none;
-        }
-        .action-link-delete:hover { text-decoration: underline; }
-    </style>
 </head>
 <body>
     <div class="container">
-        <h1>لوحة تحكم BizFlow - الفواتير</h1>
-        <!-- رابط للانتقال إلى صفحة العملاء -->
-        <a href="customers.php" class="nav-link">عرض العملاء</a>
-        <hr>
+        
+        <!-- شريط التنقل العلوي -->
+        <div class="header-nav">
+            <!-- [تحديث] استخدام اسم الشركة الديناميكي -->
+            <h1>لوحة تحكم <?php echo htmlspecialchars($current_company_name); ?> - الفواتير</h1>
+            <div>
+                <!-- [تحديث] الروابط أصبحت جزءًا من شريط التنقل -->
+                <a href="index.php" class="nav-link active">عرض الفواتير</a>
+                <a href="customers.php" class="nav-link">عرض العملاء</a>
+                <a href="account.php" class="nav-link">حسابي (للربط)</a>
+                <a href="logout.php" class="nav-link logout-btn">تسجيل الخروج</a>
+            </div>
+        </div>
 
-        <!-- [جديد] عرض رسائل النجاح أو الخطأ -->
+        <!-- عرض رسائل النجاح أو الخطأ -->
         <?php if ($success_message): ?>
-            <p class="success-message"><?php echo htmlspecialchars($success_message); ?></p>
+            <p class="message success-message"><?php echo htmlspecialchars($success_message); ?></p>
         <?php endif; ?>
         <?php if ($error_message): ?>
-            <p class="error-message"><?php echo htmlspecialchars($error_message); ?></p>
+            <p class="message error-message"><?php echo htmlspecialchars($error_message); ?></p>
         <?php endif; ?>
-        
+
         <table>
             <thead>
                 <tr>
-                    <th>رقم الفاتورة</th>
+                    <th>#</th>
                     <th>العميل</th>
                     <th>المبلغ</th>
                     <th>تاريخ الاستحقاق</th>
                     <th>الحالة</th>
-                    <th>إجراءات</th> <!-- [جديد] تعديل اسم العمود -->
+                    <th class="actions-column">إجراءات</th>
                 </tr>
             </thead>
             <tbody>
-                <?php if (!empty($invoices)): ?>
+                <?php if (empty($invoices)): ?>
+                    <tr>
+                        <!-- [تحديث] التأكد من أن الرسالة تشمل كل الأعمدة -->
+                        <td colspan="6" style="text-align: center;">لا توجد فواتير لعرضها حاليًا. (جرب إضافة فاتورة جديدة عبر البوت!)</td>
+                    </tr>
+                <?php else: ?>
                     <?php foreach ($invoices as $invoice): ?>
                         <tr>
-                            <td>#<?php echo htmlspecialchars($invoice['invoice_id']); ?></td>
+                            <td><?php echo htmlspecialchars($invoice['invoice_id']); ?></td>
                             <td><?php echo htmlspecialchars($invoice['first_name'] . ' ' . $invoice['last_name']); ?></td>
-                            <td><?php echo number_format($invoice['amount'], 2); ?></td>
+                            <td><?php echo htmlspecialchars(number_format($invoice['amount'], 2)); ?></td>
                             <td><?php echo htmlspecialchars($invoice['due_date']); ?></td>
                             <td>
-                                <!-- تنسيق الحالة بناءً على القيمة -->
                                 <span class="status-<?php echo htmlspecialchars($invoice['status']); ?>">
-                                    <?php echo $invoice['status'] == 'paid' ? 'مدفوعة' : 'قيد الانتظار'; ?>
+                                    <?php 
+                                    if ($invoice['status'] == 'paid') echo 'مدفوعة';
+                                    elseif ($invoice['status'] == 'pending') echo 'قيد الانتظار';
+                                    elseif ($invoice['status'] == 'cancelled') echo 'ملغاة';
+                                    else echo htmlspecialchars($invoice['status']);
+                                    ?>
                                 </span>
                             </td>
-                            <!-- [جديد] إضافة روابط التعديل والحذف -->
-                            <td>
-                                <?php if ($invoice['status'] != 'paid'): ?>
-                                    <a href="index.php?action=mark_paid&id=<?php echo $invoice['invoice_id']; ?>" class="action-link" onclick="return confirm('هل أنت متأكد من تحديد هذه الفاتورة كمدفوعة؟');">
-                                        تحديد كمدفوعة
-                                    </a>
+                            <!-- [تحديث] إضافة روابط التعديل والحذف -->
+                            <td class="actions-links">
+                                <?php if ($invoice['status'] == 'pending'): ?>
+                                    <!-- هذا الرابط من الكود الأصلي، يبدو أنه يقوم بالتحديث مباشرة -->
+                                    <a href="edit_invoice.php?action=mark_paid&id=<?php echo $invoice['invoice_id']; ?>" class="action-link" onclick="return confirm('هل أنت متأكد من تحديث حالة الفاتورة إلى مدفوعة؟');">دُفعت</a>
                                 <?php endif; ?>
-                                <a href="edit_invoice.php?id=<?php echo $invoice['invoice_id']; ?>" class="action-link-edit">تعديل</a>
-                                <a href="delete_invoice.php?id=<?php echo $invoice['invoice_id']; ?>" class="action-link-delete" onclick="return confirm('هل أنت متأكد من حذف هذه الفاتورة؟ \nهذا الإجراء لا يمكن التراجع عنه.');">حذف</a>
+                                <a href="edit_invoice.php?id=<?php echo $invoice['invoice_id']; ?>" class="action-link edit">تعديل</a>
+                                <a href="delete_invoice.php?id=<?php echo $invoice['invoice_id']; ?>" class="action-link delete" onclick="return confirm('هل أنت متأكد من حذف هذه الفاتورة؟ لا يمكن التراجع عن هذا الإجراء.');">حذف</a>
                             </td>
                         </tr>
                     <?php endforeach; ?>
-                <?php elseif (!$error_message): ?>
-                    <tr>
-                        <td colspan="6" style="text-align: center;">لا توجد فواتير لعرضها حاليًا.</td>
-                    </tr>
                 <?php endif; ?>
             </tbody>
         </table>
     </div>
 </body>
 </html>
-
