@@ -1,81 +1,110 @@
 <?php
-// --- 1. استدعاء القالب العلوي (Header) ---
-// سيتولى هذا الملف بدء الجلسة، التحقق من تسجيل الدخول، وعرض شريط التنقل
-require 'header.php';
+// [1. بدء الجلسة والاتصال]
+// يجب أن يكون session_start() في config.php هو السطر الأول
+require_once 'config.php';
 
-// --- 2. منطق هذه الصفحة فقط (جلب/إنشاء رمز ربط تيليجرام) ---
+// [2. حارس الأمان]
+// التحقق مما إذا كان المستخدم مسجلاً دخوله
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php"); // إعادة التوجيه إلى صفحة تسجيل الدخول
+    exit;
+}
 
-// جلب بيانات المستخدم من الجلسة وقاعدة البيانات
-$user_id = $_SESSION['user_id'];
-$user_email = $_SESSION['email']; 
-$company_name = $_SESSION['company_name']; 
+// جلب معلومات المستخدم المسجل دخوله
+$current_user_id = $_SESSION['user_id'];
+$company_name = $_SESSION['company_name'] ?? 'BizFlow';
 
+// [3. منطق الصفحة: ربط حساب تيليجرام]
 $link_code = null;
-$telegram_id = null;
 $error_message = null;
+$success_message = null;
 
 try {
-    // جلب رمز الربط الحالي ومعرف تيليجرام (إن وجد)
-    $stmt = $db_connection->prepare("SELECT telegram_link_code, telegram_chat_id FROM users WHERE user_id = :user_id");
-    $stmt->execute([':user_id' => $user_id]);
-    $user_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    // التحقق مما إذا كان الحساب مربوطًا بالفعل
+    $stmt_check = $db_connection->prepare("SELECT telegram_chat_id, telegram_link_code FROM users WHERE user_id = :user_id");
+    $stmt_check->execute(['user_id' => $current_user_id]);
+    $user_data = $stmt_check->fetch(PDO::FETCH_ASSOC);
 
-    $telegram_id = $user_data['telegram_chat_id'];
+    $is_linked = !empty($user_data['telegram_chat_id']);
     $link_code = $user_data['telegram_link_code'];
 
-    // إذا لم يكن المستخدم مربوطًا وليس لديه رمز، قم بإنشاء رمز جديد
-    if (!$telegram_id && !$link_code) {
-        $link_code = "BZF-" . strtoupper(bin2hex(random_bytes(5))); // مثال: BZF-A1B2C3D4E5
-        $update_stmt = $db_connection->prepare("UPDATE users SET telegram_link_code = :link_code WHERE user_id = :user_id");
-        $update_stmt->execute([':link_code' => $link_code, ':user_id' => $user_id]);
+    // إذا لم يكن الحساب مربوطًا وليس لديه رمز، قم بإنشاء رمز جديد
+    if (!$is_linked && empty($link_code)) {
+        // إنشاء رمز فريد وآمن (BZF- متبوعًا بـ 10 أحرف/أرقام)
+        $link_code = 'BZF-' . strtoupper(bin2hex(random_bytes(5)));
+        
+        // حفظ الرمز في قاعدة البيانات لهذا المستخدم
+        $stmt_update = $db_connection->prepare("UPDATE users SET telegram_link_code = :link_code WHERE user_id = :user_id");
+        $stmt_update->execute(['link_code' => $link_code, 'user_id' => $current_user_id]);
+        
+        $success_message = "تم إنشاء رمز ربط جديد لك.";
     }
+
 } catch (PDOException $e) {
-    logError("Database Error (account.php): " . $e->getMessage());
-    $error_message = "حدث خطأ أثناء جلب بيانات الحساب.";
+    // معالجة أخطاء قاعدة البيانات
+    $error_message = "حدث خطأ في قاعدة البيانات: " . $e->getMessage();
+    // تسجيل الخطأ (للمسؤول)
+    logError("Account Page Error (User: $current_user_id): " . $e->getMessage());
+} catch (Exception $e) {
+    // معالجة أخطاء إنشاء الرمز (مثل random_bytes)
+     $error_message = "حدث خطأ غير متوقع أثناء إنشاء الرمز: " . $e->getMessage();
+     logError("Account Page Error (User: $current_user_id): " . $e->getMessage());
 }
+
+
+// [4. تضمين القالب العلوي (Header)]
+// سيقوم هذا الملف بالتحقق من تسجيل الدخول وعرض شريط التنقل
+require 'header.php';
 ?>
 
-<!-- 3. عرض محتوى الصفحة -->
-<div class="page-header">
-    <h1>إدارة الحساب</h1>
-</div>
+<!-- 5. محتوى الصفحة -->
+<div class="page-title">إدارة الحساب</div>
+<p class="page-subtitle">هنا يمكنك إدارة إعدادات حسابك وربط الخدمات.</p>
 
-<!-- عرض رسائل الخطأ (إن وجدت) -->
 <?php if ($error_message): ?>
     <div class="message error"><?php echo htmlspecialchars($error_message); ?></div>
 <?php endif; ?>
+<?php if ($success_message): ?>
+    <div class="message success"><?php echo htmlspecialchars($success_message); ?></div>
+<?php endif; ?>
 
-<!-- استخدام .form-container لتنسيق الصندوق الأبيض -->
-<div class="form-container">
-    <h3>مرحبًا بك، <?php echo htmlspecialchars($company_name); ?>!</h3>
-    <p><strong>البريد الإلكتروني:</strong> <?php echo htmlspecialchars($user_email); ?></p>
+<div class="form-container" style="max-width: 600px; margin: 20px auto;">
+    <h2>مرحبًا بك، <?php echo htmlspecialchars($company_name); ?>!</h2>
+    <p><strong>البريد الإلكتروني:</strong> <?php echo htmlspecialchars($_SESSION['email'] ?? 'غير متاح'); ?></p>
     
-    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+    <hr style="margin: 20px 0;">
+
+    <h3>ربط حساب تيليجرام</h3>
     
-    <h4>ربط حساب تيليجرام</h4>
-    
-    <?php if ($telegram_id): ?>
+    <?php if ($is_linked): ?>
+        <!-- إذا كان الحساب مربوطًا بالفعل -->
         <div class="message success">
-            ✅ حسابك مرتبط بنجاح بمعرف تيليجرام: <strong><?php echo htmlspecialchars($telegram_id); ?></strong>
-            <br><small>(إذا أردت تغيير الربط، ستحتاج للتواصل مع الدعم الفني - ميزة لم نبرمجها بعد)</small>
+            <p><strong>حسابك مربوط بنجاح!</strong></p>
+            <p>معرف تيليجرام الخاص بك المسجل لدينا هو: <strong><?php echo htmlspecialchars($user_data['telegram_chat_id']); ?></strong></p>
+            <p>(إذا أردت تغيير الحساب المربوط، ستحتاج إلى الاتصال بالدعم - لم نبرمج هذه الميزة بعد).</p>
         </div>
     <?php else: ?>
-        <p>لربط حسابك في BizFlow بالبوت، يرجى اتباع الخطوات التالية:</p>
-        <ol>
-            <li>افتح تطبيق تيليجرام وتحدث إلى <strong>BizFlow Assistant Bot</strong> (أو أي اسم أعطيته لبوتك).</li>
-            <li>أرسل الأمر التالي <strong>بالضبط</strong> كما هو:</li>
+        <!-- إذا لم يكن الحساب مربوطًا -->
+        <p>اربط حسابك في البوت BizFlow Assistant Bot لتتمكن من إضافة العملاء والفواتير مباشرة من تيليجرام.</p>
+        <ol style="line-height: 1.6;">
+            <li>افتح تطبيق تيليجرام وابحث عن البوت (أو أرسل اسم البوت لعميلك).</li>
+            <li>أرسل الأمر التالي <strong>بالضبط كما هو</strong> للبوت:</li>
         </ol>
-        
-        <!-- صندوق لعرض الرمز بشكل واضح -->
-        <div style="background-color: #f4f4f4; border: 1px solid #ddd; padding: 15px 20px; border-radius: 5px; font-family: monospace; direction: ltr; text-align: left; margin: 20px 0; font-size: 1.1em; font-weight: bold; letter-spacing: 1px;">
+
+        <div class="code-box">
             /link <?php echo htmlspecialchars($link_code); ?>
         </div>
         
-        <p><small>هذا الرمز صالح للاستخدام مرة واحدة فقط وسيربط هذا الحساب بحساب تيليجرام الذي ترسل منه الرسالة.</small></p>
+        <p style="font-size: 0.9em; color: #555; margin-top: 15px;">
+            <small>
+                هذا الرمز صالح للاستخدام مرة واحدة فقط لربط هذا الحساب بحساب تيليجرام الذي ترسل منه الرسالة.
+            </small>
+        </p>
     <?php endif; ?>
+    
 </div>
 
 <?php
-// --- 4. استدعاء القالب السفلي (Footer) ---
+// [6. تضمين القالب السفلي (Footer)]
 require 'footer.php';
 ?>
