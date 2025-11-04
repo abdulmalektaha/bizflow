@@ -1,175 +1,137 @@
 <?php
-// [1. بدء الجلسة والاتصال]
-require_once 'config.php'; // سيقوم ببدء الجلسة session_start()
+// --- 1. استدعاء القالب العلوي (Header) ---
+// سيتولى هذا الملف بدء الجلسة، التحقق من تسجيل الدخول، وعرض شريط التنقل
+require 'header.php';
 
-// [2. حارس الأمان (Authentication Guard)]
-// التحقق مما إذا كان المستخدم مسجلاً دخوله
-if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php");
-    exit();
+// --- 2. منطق هذه الصفحة فقط (تعديل الفاتورة) ---
+$invoice_id = $_GET['id'] ?? null;
+$invoice = null;
+$customers = [];
+$error_message = null;
+$current_user_id = $_SESSION['user_id'];
+
+// التحقق من أن ID الفاتورة موجود
+if (!$invoice_id || !filter_var($invoice_id, FILTER_VALIDATE_INT)) {
+    header("Location: index.php?error=" . urlencode("معرف الفاتورة غير صالح."));
+    exit;
 }
 
-// [3. جلب بيانات المستخدم الحالي من الجلسة]
-$current_user_id = $_SESSION['user_id'];
-$current_company_name = $_SESSION['company_name'] ?? 'شركتي';
-$invoice_id = $_GET['id'] ?? null;
-
-// [4. معالجة إرسال النموذج (POST Request) - التحديث]
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // جلب البيانات من النموذج
-    $invoice_id_post = $_POST['invoice_id'] ?? null;
-    $customer_id = $_POST['customer_id'] ?? null;
-    $amount = trim($_POST['amount'] ?? '');
-    $status = trim($_POST['status'] ?? '');
-    $due_date = trim($_POST['due_date'] ?? '');
-
-    // التحقق من أن البيانات الأساسية موجودة
-    if ($invoice_id_post && $customer_id && $amount && $status && $due_date) {
-        try {
-            // [تحديث الأمان]
-            // قم بالتحديث فقط إذا كانت الفاتورة تنتمي للمستخدم الحالي
-            $sql = "UPDATE invoices 
-                    SET customer_id = :customer_id, 
+try {
+    // --- معالجة النموذج عند الإرسال (POST) ---
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        // جلب البيانات من النموذج
+        $customer_id = trim($_POST['customer_id']);
+        $amount = trim($_POST['amount']);
+        $due_date = trim($_POST['due_date']);
+        $status = trim($_POST['status']);
+        
+        // التحقق من المدخلات
+        if (empty($customer_id) || empty($amount) || empty($status)) {
+            $error_message = "العميل والمبلغ والحالة هي حقول مطلوبة.";
+        } else {
+            // [حارس التفويض] التأكد من أن المستخدم يقوم بتحديث فاتورة يملكها
+            $sql = "UPDATE invoices SET 
+                        customer_id = :customer_id, 
                         amount = :amount, 
-                        status = :status, 
-                        due_date = :due_date
+                        due_date = :due_date,
+                        status = :status 
                     WHERE invoice_id = :invoice_id AND user_id = :user_id";
             
             $stmt = $db_connection->prepare($sql);
             $stmt->execute([
-                'customer_id' => $customer_id,
-                'amount' => $amount,
-                'status' => $status,
-                'due_date' => $due_date,
-                'invoice_id' => $invoice_id_post,
-                'user_id' => $current_user_id
+                ':customer_id' => $customer_id,
+                ':amount' => $amount,
+                ':due_date' => $due_date ? $due_date : null, // السماح بقيمة NULL
+                ':status' => $status,
+                ':invoice_id' => $invoice_id,
+                ':user_id' => $current_user_id
             ]);
-
-            // التحقق مما إذا كان أي صف قد تأثر
-            if ($stmt->rowCount() > 0) {
-                $_SESSION['success_message'] = "تم تحديث بيانات الفاتورة بنجاح!";
-            } else {
-                $_SESSION['error_message'] = "لم يتم إجراء أي تغييرات أو أن الفاتورة غير موجودة.";
-            }
+            
+            // تخزين رسالة النجاح في الجلسة وإعادة التوجيه
+            $_SESSION['success_message'] = "تم تحديث الفاتورة بنجاح!";
             header("Location: index.php");
-            exit();
-
-        } catch (PDOException $e) {
-            logError("edit_invoice.php (POST) - PDOException: " . $e->getMessage());
-            $error_message = "حدث خطأ في قاعدة البيانات أثناء التحديث.";
-            // البقاء في الصفحة لعرض رسالة الخطأ
+            exit;
         }
-    } else {
-        $error_message = "يرجى ملء جميع الحقول المطلوبة.";
-    }
-}
-
-// [5. جلب بيانات الفاتورة للعرض (GET Request)]
-// إذا لم يكن طلب POST، أو إذا فشل التحقق من POST
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    if (!$invoice_id) {
-        $_SESSION['error_message'] = "لم يتم تحديد معرف الفاتورة.";
-        header("Location: index.php");
-        exit();
     }
 
-    try {
-        // [تحديث الأمان]
-        // قم بالجلب فقط إذا كانت الفاتورة تنتمي للمستخدم الحالي
-        $sql = "SELECT * FROM invoices WHERE invoice_id = :id AND user_id = :user_id";
-        $stmt = $db_connection->prepare($sql);
-        $stmt->execute(['id' => $invoice_id, 'user_id' => $current_user_id]);
-        $invoice = $stmt->fetch(PDO::FETCH_ASSOC);
+    // --- جلب بيانات الفاتورة لعرضها في النموذج (GET) ---
+    // [حارس التفويض] التأكد من أن المستخدم يجلب فاتورة يملكها
+    $sql_get = "SELECT * FROM invoices WHERE invoice_id = :invoice_id AND user_id = :user_id";
+    $stmt_get = $db_connection->prepare($sql_get);
+    $stmt_get->execute([':invoice_id' => $invoice_id, ':user_id' => $current_user_id]);
+    $invoice = $stmt_get->fetch(PDO::FETCH_ASSOC);
 
-        // إذا لم يتم العثور على الفاتورة (أو لا تنتمي للمستخدم)، أعد التوجيه
-        if (!$invoice) {
-            $_SESSION['error_message'] = "خطأ: الفاتورة غير موجودة أو لا يمكنك الوصول إليها.";
-            header("Location: index.php");
-            exit();
-        }
-        
-        // [تحديث الأمان] جلب العملاء الخاصين بهذا المستخدم فقط لملء القائمة المنسدلة
-        $sql_customers = "SELECT customer_id, first_name, last_name FROM customers WHERE user_id = :user_id ORDER BY first_name";
-        $stmt_customers = $db_connection->prepare($sql_customers);
-        $stmt_customers->execute(['user_id' => $current_user_id]);
-        $customers = $stmt_customers->fetchAll(PDO::FETCH_ASSOC);
-
-    } catch (PDOException $e) {
-        logError("edit_invoice.php (GET) - PDOException: " . $e->getMessage());
-        $_SESSION['error_message'] = "حدث خطأ أثناء جلب بيانات الفاتورة.";
-        header("Location: index.php");
-        exit();
+    // إذا لم يتم العثور على الفاتورة (أو لا يملكها المستخدم)
+    if (!$invoice) {
+        header("Location: index.php?error=" . urlencode("لم يتم العثور على الفاتورة أو ليس لديك صلاحية للوصول إليها."));
+        exit;
     }
+    
+    // جلب قائمة العملاء الخاصين بهذا المستخدم لملء القائمة المنسدلة
+    $stmt_customers = $db_connection->prepare("SELECT customer_id, first_name, last_name FROM customers WHERE user_id = :user_id ORDER BY first_name");
+    $stmt_customers->execute([':user_id' => $current_user_id]);
+    $customers = $stmt_customers->fetchAll(PDO::FETCH_ASSOC);
+
+} catch (PDOException $e) {
+    logError("Database Error (edit_invoice.php): " . $e->getMessage());
+    $error_message = "حدث خطأ أثناء معالجة الطلب.";
 }
 ?>
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <title>تعديل الفاتورة - BizFlow</title>
-    <link rel="stylesheet" href="style.css">
-</head>
-<body>
-    <div class="container">
+
+<!-- 3. عرض محتوى الصفحة -->
+<div class="page-header">
+    <h1>تعديل الفاتورة (رقم #<?php echo htmlspecialchars($invoice_id); ?>)</h1>
+</div>
+
+<!-- عرض رسائل الخطأ (إن وجدت) -->
+<?php if ($error_message): ?>
+    <div class="message error"><?php echo htmlspecialchars($error_message); ?></div>
+<?php endif; ?>
+
+<!-- نموذج تعديل الفاتورة -->
+<div class="form-container">
+    <form action="edit_invoice.php?id=<?php echo htmlspecialchars($invoice_id); ?>" method="POST">
         
-        <!-- شريط التنقل العلوي -->
-        <div class="header-nav">
-            <h1>لوحة تحكم <?php echo htmlspecialchars($current_company_name); ?> - تعديل الفاتورة</h1>
-            <div>
-                <a href="index.php" class="nav-link active">عرض الفواتير</a>
-                <a href="customers.php" class="nav-link">عرض العملاء</a>
-                <a href="logout.php" class="nav-link logout-btn">تسجيل الخروج</a>
-            </div>
+        <div class="form-group">
+            <label for="customer_id">العميل (مطلوب)</label>
+            <select id="customer_id" name="customer_id" required>
+                <?php foreach ($customers as $customer): ?>
+                    <option value="<?php echo htmlspecialchars($customer['customer_id']); ?>" 
+                        <?php echo ($customer['customer_id'] == $invoice['customer_id']) ? 'selected' : ''; ?>>
+                        <?php echo htmlspecialchars($customer['first_name'] . ' ' . $customer['last_name']); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
         </div>
+        
+        <div class="form-group">
+            <label for="amount">المبلغ (مطلوب)</label>
+            <input type="number" step="0.01" id="amount" name="amount" value="<?php echo htmlspecialchars($invoice['amount'] ?? ''); ?>" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="due_date">تاريخ الاستحقاق</label>
+            <input type="date" id="due_date" name="due_date" value="<?php echo htmlspecialchars($invoice['due_date'] ?? ''); ?>">
+        </div>
+        
+        <div class="form-group">
+            <label for="status">الحالة (مطلوب)</label>
+            <select id="status" name="status" required>
+                <option value="pending" <?php echo ($invoice['status'] == 'pending') ? 'selected' : ''; ?>>قيد الانتظار</option>
+                <option value="paid" <?php echo ($invoice['status'] == 'paid') ? 'selected' : ''; ?>>مدفوعة</option>
+                <option value="cancelled" <?php echo ($invoice['status'] == 'cancelled') ? 'selected' : ''; ?>>ملغاة</option>
+            </select>
+        </div>
+        
+        <div class="form-actions">
+            <button type="submit" class="button">حفظ التغييرات</button>
+            <a href="index.php" class="button button-secondary">إلغاء</a>
+        </div>
+    </form>
+</div>
 
-        <!-- عرض رسائل الخطأ (إذا حدث خطأ أثناء POST) -->
-        <?php if (!empty($error_message)): ?>
-            <p class="message error-message"><?php echo htmlspecialchars($error_message); ?></p>
-        <?php endif; ?>
-
-        <!-- نموذج تعديل الفاتورة -->
-        <form action="edit_invoice.php?id=<?php echo htmlspecialchars($invoice_id); ?>" method="post" class="data-form">
-            <!-- إخفاء حقل ID الفاتورة لإرساله مع النموذج -->
-            <input type="hidden" name="invoice_id" value="<?php echo htmlspecialchars($invoice['invoice_id']); ?>">
-            
-            <div class="form-group">
-                <label for="customer_id">العميل (مطلوب):</label>
-                <select id="customer_id" name="customer_id" required>
-                    <?php foreach ($customers as $customer): ?>
-                        <option value="<?php echo htmlspecialchars($customer['customer_id']); ?>" 
-                                <?php echo ($customer['customer_id'] == $invoice['customer_id']) ? 'selected' : ''; ?>>
-                            <?php echo htmlspecialchars($customer['first_name'] . ' ' . $customer['last_name']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            
-            <div class="form-group">
-                <label for="amount">المبلغ (مطلوب):</label>
-                <input type="number" step="0.01" id="amount" name="amount" value="<?php echo htmlspecialchars($invoice['amount'] ?? ''); ?>" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="status">الحالة (مطلوب):</label>
-                <select id="status" name="status" required>
-                    <option value="pending" <?php echo ($invoice['status'] == 'pending') ? 'selected' : ''; ?>>قيد الانتظار</option>
-                    <option value="paid" <?php echo ($invoice['status'] == 'paid') ? 'selected' : ''; ?>>مدفوعة</option>
-                    <option value="cancelled" <?php echo ($invoice['status'] == 'cancelled') ? 'selected' : ''; ?>>ملغاة</option>
-                </select>
-            </div>
-            
-            <div class="form-group">
-                <label for="due_date">تاريخ الاستحقاق (مطلوب):</label>
-                <input type="date" id="due_date" name="due_date" value="<?php echo htmlspecialchars($invoice['due_date'] ?? ''); ?>" required>
-            </div>
-            
-            <div class="form-actions">
-                <button type="submit" class="button button-primary">حفظ التغييرات</button>
-                <a href="index.php" class="button button-secondary">إلغاء</a>
-            </div>
-        </form>
-
-    </div>
-</body>
-</html>
+<?php
+// --- 4. استدعاء القالب السفلي (Footer) ---
+require 'footer.php';
+?>
 
