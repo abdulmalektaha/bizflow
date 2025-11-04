@@ -43,8 +43,5 @@ $current_page = basename($_SERVER['PHP_SELF']);
 
     <!-- 4. بدء حاوية المحتوى الرئيسية -->
     <div class="container">
-            </div> <!-- /إنهاء حاوية .container التي بدأت في header.php -->
-
-</body>
-</html>
+       
         <!-- سيتم وضع محتوى الصفحة (مثل جدول الفواتير) هنا -->
