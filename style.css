@@ -1,13 +1,219 @@
-body { font-family: sans-serif; background-color: #f4f4f9; color: #333; margin: 0; padding: 0; }
-.container { max-width: 600px; margin: 50px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-h1, h2 { text-align: center; color: #4a4a4a; }
-form { display: flex; flex-direction: column; gap: 15px; }
-input, select { padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }
-label { margin-bottom: -10px; font-weight: bold; font-size: 14px; }
-button { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
-button:hover { background-color: #0056b3; }
-.message { text-align: center; padding: 10px; margin-bottom: 20px; border-radius: 4px; }
-.success { background-color: #d4edda; color: #155724; }
-.error { background-color: #f8d7da; color: #721c24; }
-.nav-links { text-align: center; margin-top: 20px; }
-.nav-links a { margin: 0 15px; text-decoration: none; color: #007bff; font-weight: bold; }
+/* === 1. الأنماط العامة (القديمة) === */
+body {
+    font-family: 'Tahoma', sans-serif;
+    background-color: #f4f7f6;
+    margin: 0;
+    padding: 0;
+    direction: rtl; /* ضمان الاتجاه من اليمين لليسار */
+}
+
+.container {
+    max-width: 1000px;
+    margin: 20px auto;
+    padding: 20px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+h1, h2 {
+    color: #333;
+    text-align: center;
+    border-bottom: 2px solid #f0f0f0;
+    padding-bottom: 10px;
+}
+
+/* === 2. أنماط شريط التنقل (الجديدة) === */
+.navbar {
+    background-color: #007bff;
+    padding: 10px 20px;
+    border-radius: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap; /* لإدارة الشاشات الصغيرة */
+}
+
+.navbar .brand {
+    color: #ffffff;
+    font-weight: bold;
+    font-size: 1.4em;
+}
+
+.navbar .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 10px; /* مسافة بين الروابط */
+}
+
+.navbar .nav-links a {
+    color: #ffffff;
+    text-decoration: none;
+    padding: 8px 12px;
+    border-radius: 5px;
+    transition: background-color 0.3s;
+}
+
+.navbar .nav-links a:hover,
+.navbar .nav-links a.active {
+    background-color: #0056b3;
+}
+
+.navbar .nav-links a.logout {
+    background-color: #dc3545;
+}
+
+.navbar .nav-links a.logout:hover {
+    background-color: #c82333;
+}
+/* === 3. أنماط الجداول (القديمة) === */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+th, td {
+    padding: 12px;
+    border: 1px solid #ddd;
+    text-align: right; /* ضمان المحاذاة لليمين */
+}
+
+th {
+    background-color: #f8f9fa;
+    font-weight: bold;
+    color: #555;
+}
+
+tr:nth-child(even) {
+    background-color: #fdfdfd;
+}
+
+tr:hover {
+    background-color: #f5f5f5;
+}
+
+/* === 4. أنماط رسائل الحالة (القديمة) === */
+.status {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-weight: bold;
+    display: inline-block;
+    font-size: 0.9em;
+}
+
+.status-paid, .status-مدفوعة {
+    color: #155724;
+    background-color: #d4edda;
+}
+
+.status-pending, .status-قيد الانتظار {
+    color: #856404;
+    background-color: #fff3cd;
+}
+
+.status-cancelled, .status-ملغاة {
+    color: #721c24;
+    background-color: #f8d7da;
+}
+
+/* === 5. أنماط روابط الإجراءات (القديمة والمعدلة) === */
+.actions a {
+    color: #007bff;
+    text-decoration: none;
+    margin-left: 10px; /* مسافة بين الروابط */
+}
+.actions a:hover {
+    text-decoration: underline;
+}
+.actions a.edit {
+    color: #ffc107;
+}
+.actions a.delete {
+    color: #dc3545;
+}
+
+/* === 6. أنماط النماذج (Forms) (جديدة/مستخدمة في التسجيل والتعديل) === */
+.form-container {
+    max-width: 500px;
+    margin: 20px auto;
+    padding: 20px;
+    background: #fdfdfd;
+    border: 1px solid #eee;
+    border-radius: 8px;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+    color: #555;
+}
+
+.form-group input[type="text"],
+.form-group input[type="email"],
+.form-group input[type="password"],
+.form-group input[type="date"],
+.form-group input[type="number"],
+.form-group select {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    box-sizing: border-box; /* لضمان عدم تجاوز العرض */
+}
+
+.btn {
+    display: inline-block;
+    padding: 10px 15px;
+    border: none;
+    border-radius: 5px;
+    text-decoration: none;
+    color: #fff;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.btn-primary {
+    background-color: #007bff;
+}
+.btn-primary:hover {
+    background-color: #0056b3;
+}
+.btn-secondary {
+    background-color: #6c757d;
+}
+.btn-secondary:hover {
+    background-color: #5a6268;
+}
+
+/* === 7. أنماط رسائل التنبيه (جديدة) === */
+.alert {
+    padding: 15px;
+    margin-bottom: 20px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    text-align: center;
+}
+.alert-success {
+    color: #155724;
+    background-color: #d4edda;
+    border-color: #c3e6cb;
+}
+.alert-danger {
+    color: #721c24;
+    background-color: #f8d7da;
+    border-color: #f5c6cb;
+}
+.alert-info {
+    color: #0c5460;
+    background-color: #d1ecf1;
+    border-color: #bee5eb;
+}
