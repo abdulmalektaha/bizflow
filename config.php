@@ -23,7 +23,7 @@ function logError($message) {
     }
     // [توقيت كوالالمبور]
     $timestamp = date('Y-m-d H:i:s'); 
-    file_put_contents('/var/www/html/php_errors.log', "[$timestamp] " . $message . PHP_EOL, FILE_APPEND);
+    @file_put_contents('/var/www/html/php_errors.log', "[$timestamp] " . $message . PHP_EOL, FILE_APPEND);
 }
 
 // [4. ضبط المنطقة الزمنية (هام)]
@@ -33,17 +33,17 @@ date_default_timezone_set('Asia/Kuala_Lumpur');
 
 
 // [5. إعدادات المفاتيح (API Keys)]
-// !! هام: ضع قيمك الحقيقية هنا !!
-define('TELEGRAM_BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE'); 
-define('OPENAI_API_KEY', 'YOUR_OPENAI_KEY_HERE'); 
-define('MANAGEMENT_CHAT_ID', 'YOUR_MANAGEMENT_CHAT_ID_HERE');
+// !! هام: تم وضع قيمك الحقيقية هنا !!
+define('TELEGRAM_BOT_TOKEN', '8464809764:AAE7Rv4Iu2_Rq0eCcxN9QwqF_3iundvsq90'); 
+define('OPENAI_API_KEY', 'sk-proj-jMlhCS7q4TfTS4c_SUMDPR5cwveEj6...'); // (القيمة التي أدخلتها سابقًا - اتركها كما هي)
+define('MANAGEMENT_CHAT_ID', '7751190692'); // (رقمك الخاص)
 
 
 // [6. إعدادات الاتصال بقاعدة البيانات (PostgreSQL)]
 $db_host = '127.0.0.1'; // يعني "هذا السيرفر"
 $db_name = 'bizflow_db';
 $db_user = 'postgres'; // هذا هو المستخدم الافتراضي لـ PostgreSQL
-$db_pass = 'qweasd123@!'; // !! تأكد أن هذه هي كلمة المرور الصحيحة !!
+$db_pass = 'qweasd123@!'; // !! [تم التصحيح] هذا هو الخطأ الإملائي الذي أصلحناه !!
 
 
 // [7. كود الاتصال بقاعدة البيانات]
