@@ -35,7 +35,7 @@ date_default_timezone_set('Asia/Kuala_Lumpur');
 // [5. إعدادات المفاتيح (API Keys)]
 // !! هام: تم وضع قيمك الحقيقية هنا !!
 define('TELEGRAM_BOT_TOKEN', '8464809764:AAE7Rv4Iu2_Rq0eCcxN9QwqF_3iundvsq90'); 
-define('OPENAI_API_KEY', 'sk-proj-jMlhCS7q4TfTS4c_SUMDPR5cwveEj6...'); // (القيمة التي أدخلتها سابقًا - اتركها كما هي)
+define('OPENAI_API_KEY', '8464809764:AAE7Rv4Iu2_Rq0eCcxN9QwqF_3iundvsq90'); // (القيمة التي أدخلتها سابقًا - اتركها كما هي)
 define('MANAGEMENT_CHAT_ID', '7751190692'); // (رقمك الخاص)
 
 
@@ -43,7 +43,7 @@ define('MANAGEMENT_CHAT_ID', '7751190692'); // (رقمك الخاص)
 $db_host = '127.0.0.1'; // يعني "هذا السيرفر"
 $db_name = 'bizflow_db';
 $db_user = 'postgres'; // هذا هو المستخدم الافتراضي لـ PostgreSQL
-$db_pass = 'qweasd123$'; // !! [تم التصحيح] هذا هو الخطأ الإملائي الذي أصلحناه !!
+$db_pass = 'qweasd123@!'; // !! [تم التصحيح] هذا هو الخطأ الإملائي الذي أصلحناه !!
 
 
 // [7. كود الاتصال بقاعدة البيانات]
@@ -67,4 +67,5 @@ try {
 }
 
 ?>
+
 
