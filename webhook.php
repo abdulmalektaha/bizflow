@@ -1,7 +1,7 @@
 <?php
+session_start();
 require_once 'config.php'; // This file MUST define $db_connection and logError()
-// [!! السطر الجديد لإصلاح المشكلة !!]
-$BOT_TOKEN = defined('TELEGRAM_BOT_TOKEN') ? TELEGRAM_BOT_TOKEN : '';
+
 /**
  * Sends a message to the Telegram API.
  * @param int $chat_id
@@ -366,5 +366,3 @@ try {
 // Always respond 200 to Telegram to prevent retry loops
 http_response_code(200);
 ?>
-
-
