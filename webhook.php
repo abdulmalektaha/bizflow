@@ -1,6 +1,20 @@
 <?php
-session_start();
-require_once 'config.php'; // This file MUST define $db_connection and logError()
+// [1. CONFIG & HELPERS]
+// ========================================================
+
+// !! هام: يجب أن يكون config.php هو أول ملف يتم استدعاؤه !!
+// إنه يبدأ الجلسة session_start() ويعرّف $db_connection و logError()
+require_once 'config.php'; 
+
+// !! الإصلاح الهام: تعريف المتغير الذي تستخدمه الدوال !!
+// هذا يقرأ الثابت من config.php ويضعه في متغير
+// $BOT_TOKEN = defined('TELEGRAM_BOT_TOKEN') ? TELEGRAM_BOT_TOKEN : '';
+// ^^ [تحديث] لا نحتاج هذا السطر إذا كنا سنستخدم الثابت مباشرة ^^
+
+if (!defined('TELEGRAM_BOT_TOKEN')) {
+    logError("CRITICAL: TELEGRAM_BOT_TOKEN is not defined in config.php");
+    exit; // Stop execution if token is missing
+}
 
 /**
  * Sends a message to the Telegram API.
@@ -11,8 +25,8 @@ require_once 'config.php'; // This file MUST define $db_connection and logError(
  */
 function sendMessage($chat_id, $text, $keyboard = null)
 {
-    global $BOT_TOKEN; // Get token from config
-    $url = "https://api.telegram.org/bot" . $BOT_TOKEN . "/sendMessage";
+    // [!! الإصلاح !!] نستخدم الثابت مباشرة بدلاً من المتغير العام
+    $url = "https://api.telegram.org/bot" . TELEGRAM_BOT_TOKEN . "/sendMessage";
 
     $payload = [
         'chat_id' => $chat_id,
@@ -44,8 +58,8 @@ function sendMessage($chat_id, $text, $keyboard = null)
  */
 function answerCallbackQuery($callback_query_id, $text = null)
 {
-    global $BOT_TOKEN;
-    $url = "https://api.telegram.org/bot" . $BOT_TOKEN . "/answerCallbackQuery";
+    // [!! الإصلاح !!] نستخدم الثابت مباشرة
+    $url = "https://api.telegram.org/bot" . TELEGRAM_BOT_TOKEN . "/answerCallbackQuery";
     $payload = ['callback_query_id' => $callback_query_id];
     if ($text) {
         $payload['text'] = $text;
@@ -63,7 +77,7 @@ function answerCallbackQuery($callback_query_id, $text = null)
     curl_close($ch);
 }
 
-// --- Database Helper Functions ---
+// --- Database Helper Functions (Using BizFlow Schema) ---
 
 function getUserByChatId($chat_id)
 {
@@ -237,7 +251,7 @@ try {
             } elseif ($user_text === 'إضافة عميل') {
                 setConversationState($user_id, 'awaiting_customer_first_name');
                 clearPendingData($user_id); // Clear any old data
-                sendMessage($chat_id, "👤 حسنًا، لنضf عميلًا جديدًا.\nمن فضلك أدخل <b>الاسم الأول</b> للعميل:");
+                sendMessage($chat_id, "👤 حسنًا، لنضف عميلًا جديدًا.\nمن فضلك أدخل <b>الاسم الأول</b> للعميل:");
             
             } elseif ($user_text === 'إضافة فاتورة جديدة') {
                 // Fetch customers to show as buttons
@@ -284,6 +298,12 @@ try {
         case 'awaiting_customer_email':
             $pending_data = getPendingData($user_id);
             $email = (strtolower($user_text) === 'لا' || $user_text === '-') ? null : $user_text;
+            
+            // Validate email
+            if ($email !== null && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                sendMessage($chat_id, "❌ البريد الإلكتروني غير صالح. يرجى إدخال بريد صحيح أو إرسال 'لا'.");
+                exit(); // Stay in the same state
+            }
 
             // Add customer to DB
             $stmt = $db_connection->prepare("INSERT INTO customers (user_id, first_name, last_name, email) VALUES (?, ?, ?, ?)");
@@ -354,7 +374,8 @@ try {
     } // End of switch($user_state)
 
 } catch (PDOException $e) {
-    logError("Webhook PDO Error: " . $e->getMessage() . " (Input: $input)");
+    logError("Webhook PDO Error: ". $e->getMessage() . " (Input: $input)");
+    // Don't send technical error details to the user, just a generic message
     sendMessage($chat_id, "⚠️ حدث خطأ أثناء معالجة طلبك المتعلق بقاعدة البيانات. تم إبلاغ المسؤولين.");
 
 } catch (Exception $e) {
