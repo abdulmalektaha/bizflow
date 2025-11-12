@@ -1,5 +1,4 @@
 <?php
-session_start();
 require_once 'config.php'; 
 $BOT_TOKEN = defined('TELEGRAM_BOT_TOKEN') ? TELEGRAM_BOT_TOKEN : '';
 
@@ -12,7 +11,6 @@ $BOT_TOKEN = defined('TELEGRAM_BOT_TOKEN') ? TELEGRAM_BOT_TOKEN : '';
  */
 function sendMessage($chat_id, $text, $keyboard = null)
 {
-   
     $url = "https://api.telegram.org/bot" . TELEGRAM_BOT_TOKEN . "/sendMessage";
 
     $payload = [
@@ -323,4 +321,5 @@ try {
 // Always respond 200 to Telegram to prevent retry loops
 http_response_code(200);
 ?>
+
 
