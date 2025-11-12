@@ -1,4 +1,6 @@
 <?php
+file_put_contents(__DIR__ . '/test_log.txt', date('Y-m-d H:i:s') . " - Telegram hit!\n", FILE_APPEND);
+
 session_start();
 require_once 'config.php'; // This file MUST define $db_connection and logError()
 
@@ -365,3 +367,4 @@ try {
 // Always respond 200 to Telegram to prevent retry loops
 http_response_code(200); 
 ?> 
+
