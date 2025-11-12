@@ -1,278 +1,367 @@
 <?php
-// [1. CONFIG & HELPERS]
-require_once 'config.php'; 
+session_start();
+require_once 'config.php'; // This file MUST define $db_connection and logError()
 
-// !! الإصلاح الهام: تعريف المتغير الذي تستخدمه الدوال !!
-$BOT_TOKEN = defined('TELEGRAM_BOT_TOKEN') ? TELEGRAM_BOT_TOKEN : '';
-
-// --- دوال المساعدة ---
-
-function sendMessage($chat_id, $text, $keyboard = null) {
-    global $BOT_TOKEN; // الآن هذا المتغير أصبح يحتوي على القيمة الصحيحة
+/**
+ * Sends a message to the Telegram API.
+ * @param int $chat_id
+ * @param string $text
+ * @param array|null $keyboard Inline keyboard structure
+ * @return void
+ */
+function sendMessage($chat_id, $text, $keyboard = null)
+{
+    global $BOT_TOKEN; // Get token from config
     $url = "https://api.telegram.org/bot" . $BOT_TOKEN . "/sendMessage";
-    
+
     $payload = [
         'chat_id' => $chat_id,
         'text' => $text,
         'parse_mode' => 'HTML'
     ];
+
     if ($keyboard) {
         $payload['reply_markup'] = json_encode(['inline_keyboard' => $keyboard]);
     }
-    
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-    $result = curl_exec($ch);
+    $response = curl_exec($ch);
+    if (curl_errno($ch)) {
+        logError("cURL Error (sendMessage): " . curl_error($ch));
+    }
     curl_close($ch);
-    return $result;
 }
 
-function answerCallbackQuery($callback_query_id, $text = null) {
+/**
+ * Answers a callback query (from button press).
+ * @param string $callback_query_id
+ * @param string|null $text
+ * @return void
+ */
+function answerCallbackQuery($callback_query_id, $text = null)
+{
     global $BOT_TOKEN;
     $url = "https://api.telegram.org/bot" . $BOT_TOKEN . "/answerCallbackQuery";
     $payload = ['callback_query_id' => $callback_query_id];
-    if ($text) $payload['text'] = $text;
-    
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
+    if ($text) {
+        $payload['text'] = $text;
+    }
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5);
     curl_exec($ch);
+    if (curl_errno($ch)) {
+        logError("cURL Error (answerCallbackQuery): " . curl_error($ch));
+    }
     curl_close($ch);
 }
 
-// --- دوال قاعدة البيانات ---
+// --- Database Helper Functions ---
 
-function getUserByChatId($db, $chat_id) {
-    $stmt = $db->prepare("SELECT * FROM users WHERE telegram_chat_id = ?");
+function getUserByChatId($chat_id)
+{
+    global $db_connection;
+    $stmt = $db_connection->prepare("SELECT * FROM users WHERE telegram_chat_id = ?");
     $stmt->execute([$chat_id]);
     return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-function getUserByLinkCode($db, $code) {
-    $stmt = $db->prepare("SELECT * FROM users WHERE telegram_link_code = ?");
-    $stmt->execute([$code]);
+function getUserByLinkCode($link_code)
+{
+    global $db_connection;
+    $stmt = $db_connection->prepare("SELECT * FROM users WHERE telegram_link_code = ?");
+    $stmt->execute([$link_code]);
     return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-function updateUserState($db, $user_id, $state) {
-    $stmt = $db->prepare("UPDATE users SET conversation_state = ? WHERE user_id = ?");
+function setConversationState($user_id, $state)
+{
+    global $db_connection;
+    $stmt = $db_connection->prepare("UPDATE users SET conversation_state = ? WHERE user_id = ?");
     $stmt->execute([$state, $user_id]);
 }
 
-function savePendingData($db, $user_id, $data) {
-    $json = json_encode($data);
+function getPendingData($user_id)
+{
+    global $db_connection;
+    $stmt = $db_connection->prepare("SELECT data FROM pending_data WHERE user_id = ?");
+    $stmt->execute([$user_id]);
+    $json_data = $stmt->fetchColumn();
+    return $json_data ? json_decode($json_data, true) : [];
+}
+
+function setPendingData($user_id, $data)
+{
+    global $db_connection;
+    $json_data = json_encode($data);
+    // Use "UPSERT" logic (PostgreSQL syntax)
     $sql = "INSERT INTO pending_data (user_id, data, updated_at) VALUES (?, ?, NOW())
             ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()";
-    $stmt = $db->prepare($sql);
-    $stmt->execute([$user_id, $json]);
+    $stmt = $db_connection->prepare($sql);
+    $stmt->execute([$user_id, $json_data]);
 }
 
-function getPendingData($db, $user_id) {
-    $stmt = $db->prepare("SELECT data FROM pending_data WHERE user_id = ?");
-    $stmt->execute([$user_id]);
-    $json = $stmt->fetchColumn();
-    return $json ? json_decode($json, true) : [];
-}
-
-function clearPendingData($db, $user_id) {
-    $stmt = $db->prepare("DELETE FROM pending_data WHERE user_id = ?");
+function clearPendingData($user_id)
+{
+    global $db_connection;
+    $stmt = $db_connection->prepare("DELETE FROM pending_data WHERE user_id = ?");
     $stmt->execute([$user_id]);
 }
 
-// --- [2. MAIN LOGIC] ---
+function validateDateYMD($date)
+{
+    $d = DateTime::createFromFormat('Y-m-d', $date);
+    return $d && $d->format('Y-m-d') === $date;
+}
 
+// --- MAIN LOGIC ---
 try {
+    // Get raw input
     $input = file_get_contents('php://input');
     $update = json_decode($input, true);
 
-    if (!$update) exit;
+    if (!$update) {
+        exit; // Not an update we can handle
+    }
 
+    // Determine if it's a message or a button click (callback)
     $chat_id = null;
     $user_text = null;
     $callback_data = null;
+    $callback_query_id = null;
 
     if (isset($update['message'])) {
-        $chat_id = $update['message']['chat']['id'];
+        $chat_id = $update['message']['chat']['id'] ?? null;
         $user_text = trim($update['message']['text'] ?? '');
     } elseif (isset($update['callback_query'])) {
-        $chat_id = $update['callback_query']['message']['chat']['id'];
-        $callback_data = $update['callback_query']['data'];
-        $callback_id = $update['callback_query']['id'];
-        answerCallbackQuery($callback_id);
+        $callback_query_id = $update['callback_query']['id'];
+        $chat_id = $update['callback_query']['message']['chat']['id'] ?? null;
+        $callback_data = $update['callback_query']['data'] ?? null;
     }
 
-    if (!$chat_id) exit;
+    if (!$chat_id) {
+        exit; // No chat ID, can't respond
+    }
 
-    // 1. معالجة أمر الربط /link (الأولوية القصوى)
-    if ($user_text && strpos($user_text, '/link') === 0) {
-        $parts = explode(' ', $user_text);
-        $code = $parts[1] ?? '';
-        
-        if (!$code) {
-            sendMessage($chat_id, "❌ الرجاء إرسال الرمز بعد الأمر. مثال:\n/link BZF-12345");
+    // Find the user account linked to this chat
+    $user_row = getUserByChatId($chat_id);
+    $user_id = $user_row['user_id'] ?? null;
+    $user_state = $user_row['conversation_state'] ?? 'idle';
+
+    // --- 1. Handle Callback Queries (Button Clicks) ---
+    if ($callback_data) {
+        answerCallbackQuery($callback_query_id); // Acknowledge the click
+
+        if (!$user_row) {
+            sendMessage($chat_id, "⚠️ حسابك غير مربوط. الرجاء إرسال /link [CODE] من هاتفك أولاً.");
             exit;
         }
 
-        $target_user = getUserByLinkCode($db_connection, $code);
+        // User selected a customer from the list
+        if (strpos($callback_data, 'select_customer_') === 0) {
+            $customer_id = (int) str_replace('select_customer_', '', $callback_data);
+            
+            $pending_data = ['invoice_customer_id' => $customer_id];
+            setPendingData($user_id, $pending_data);
+            setConversationState($user_id, 'awaiting_invoice_amount');
+            
+            // Find customer name for confirmation message
+            $stmt = $db_connection->prepare("SELECT first_name, last_name FROM customers WHERE customer_id = ? AND user_id = ?");
+            $stmt->execute([$customer_id, $user_id]);
+            $customer = $stmt->fetch(PDO::FETCH_ASSOC);
+            $customer_name = $customer ? ($customer['first_name'] . ' ' . $customer['last_name']) : "العميل #$customer_id";
+
+            sendMessage($chat_id, "💰 ممتاز (تم اختيار العميل: " . htmlspecialchars($customer_name) . ").\nالآن، من فضلك أدخل مبلغ الفاتورة (أرقام فقط):");
+        }
+        exit; // End callback processing
+    } 
+    // --- 2. Handle Text Messages ---
+    if (!$user_text) {
+        exit; // No text to process
+    }
+   // --- Handle /link command (Highest priority after callbacks) ---
+    if (strpos($user_text, '/link') === 0) {
+        $parts = explode(' ', $user_text, 2);
+        $link_code = $parts[1] ?? null;
+
+        if (!$link_code) {
+            sendMessage($chat_id, "❌ يرجى إدخال رمز الربط بعد الأمر، مثال:\n/link BZF-XYZ123");
+            exit;
+        }
+
+        $target_user = getUserByLinkCode($link_code);
+
         if ($target_user) {
+            // Found user by link code. Link this chat_id to them.
             $stmt = $db_connection->prepare("UPDATE users SET telegram_chat_id = ?, telegram_link_code = NULL WHERE user_id = ?");
             $stmt->execute([$chat_id, $target_user['user_id']]);
-            
-            // تنظيف الحالة القديمة
-            updateUserState($db_connection, $target_user['user_id'], 'idle');
-            clearPendingData($db_connection, $target_user['user_id']);
-            
-            sendMessage($chat_id, "✅ تم ربط حسابك بنجاح بشركة: <b>" . htmlspecialchars($target_user['company_name']) . "</b>");
+            sendMessage($chat_id, "✅ تم ربط حسابك في BizFlow (" . htmlspecialchars($target_user['company_name']) . ") بنجاح!");
+            setConversationState($target_user['user_id'], 'idle');
+            clearPendingData($target_user['user_id']);
         } else {
             sendMessage($chat_id, "❌ رمز الربط غير صالح أو منتهي الصلاحية.");
         }
+        exit; // End /link processing
+    }
+
+    // --- 3. Check if user is linked (for all other commands) ---
+    if (!$user_row) {
+        sendMessage($chat_id, "👋 أهلاً بك في BizFlow!\n\nحسابك غير مربوط. لربط حسابك:\n1. سجل دخولك على الموقع: https://bizflow.systems\n2. اذهب إلى صفحة 'حسابي' وانسخ رمز الربط.\n3. أرسل الأمر: /link [CODE]");
         exit;
     }
 
-    // 2. التحقق من المستخدم
-    $user = getUserByChatId($db_connection, $chat_id);
-    
-    if (!$user) {
-        sendMessage($chat_id, "👋 مرحبًا! حسابك غير مربوط.\nيرجى الذهاب إلى موقع BizFlow (صفحة حسابي) للحصول على رمز الربط، ثم أرسل:\n/link [الرمز]");
-        exit;
-    }
-
-    $user_id = $user['user_id'];
-    $state = $user['conversation_state'] ?? 'idle';
-
-    // 3. معالجة أمر الإلغاء
+    // --- 4. Handle /cancel command ---
     if ($user_text === '/cancel' || $user_text === 'إلغاء') {
-        updateUserState($db_connection, $user_id, 'idle');
-        clearPendingData($db_connection, $user_id);
-        sendMessage($chat_id, "✅ تم إلغاء العملية.");
+        setConversationState($user_id, 'idle');
+        clearPendingData($user_id);
+        sendMessage($chat_id, "✅ تم إلغاء العملية بنجاح. عدت للوضع العادي.");
         exit;
     }
 
-    // 4. معالجة الحالات (State Machine)
-    if ($callback_data) {
-        // معالجة ضغطات الأزرار
-        if (strpos($callback_data, 'cust_id:') === 0) {
-            $cust_id = str_replace('cust_id:', '', $callback_data);
-            
-            // حفظ العميل المختار والانتقال للمبلغ
-            $data = ['invoice_customer_id' => $cust_id];
-            savePendingData($db_connection, $user_id, $data);
-            updateUserState($db_connection, $user_id, 'awaiting_invoice_amount');
-            
-            sendMessage($chat_id, "💰 تم اختيار العميل. الآن، أدخل <b>مبلغ الفاتورة</b> (أرقام فقط):");
-        } elseif ($callback_data === 'invoice_cancel') {
-            updateUserState($db_connection, $user_id, 'idle');
-            sendMessage($chat_id, "تم الإلغاء.");
-        }
-        exit;
-    }
+    // --- 5. Handle messages based on conversation state ---
+    switch ($user_state) {
 
-    // معالجة النصوص
-    switch ($state) {
         case 'idle':
+            // --- Handle main commands ---
             if ($user_text === '/start') {
-                sendMessage($chat_id, "مرحبًا <b>{$user['company_name']}</b>! 🚀\n\nالأوامر المتاحة:\n- <b>إضافة عميل</b>\n- <b>إضافة فاتورة جديدة</b>");
+                sendMessage($chat_id, "👋 مرحبًا بك في BizFlow!\nأنت مرتبط بحساب: <b>" . htmlspecialchars($user_row['company_name']) . "</b>.\n\nالأوامر المتاحة:\n- <code>إضافة عميل</code>\n- <code>إضافة فاتورة جديدة</code>\n- <code>/cancel</code> لإلغاء أي عملية.");
             
             } elseif ($user_text === 'إضافة عميل') {
-                updateUserState($db_connection, $user_id, 'awaiting_customer_fname');
-                sendMessage($chat_id, "👤 أدخل <b>الاسم الأول</b> للعميل:");
+                setConversationState($user_id, 'awaiting_customer_first_name');
+                clearPendingData($user_id); // Clear any old data
+                sendMessage($chat_id, "👤 حسنًا، لنضf عميلًا جديدًا.\nمن فضلك أدخل <b>الاسم الأول</b> للعميل:");
             
             } elseif ($user_text === 'إضافة فاتورة جديدة') {
-                // جلب العملاء للأزرار
-                $stmt = $db_connection->prepare("SELECT customer_id, first_name, last_name FROM customers WHERE user_id = ? LIMIT 10");
+                // Fetch customers to show as buttons
+                $stmt = $db_connection->prepare("SELECT customer_id, first_name, last_name FROM customers WHERE user_id = ? ORDER BY first_name LIMIT 10");
                 $stmt->execute([$user_id]);
                 $customers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                
+
                 if (!$customers) {
-                    sendMessage($chat_id, "⚠️ لا يوجد عملاء. أضف عميلًا أولاً.");
-                } else {
-                    $keyboard = [];
-                    foreach ($customers as $c) {
-                        $keyboard[] = [['text' => $c['first_name'] . ' ' . $c['last_name'], 'callback_data' => 'cust_id:' . $c['customer_id']]];
-                    }
-                    $keyboard[] = [['text' => '❌ إلغاء', 'callback_data' => 'invoice_cancel']];
-                    
-                    updateUserState($db_connection, $user_id, 'awaiting_invoice_customer');
-                    sendMessage($chat_id, "🧾 لمن هذه الفاتورة؟ اختر من القائمة:", ['inline_keyboard' => $keyboard]);
+                    sendMessage($chat_id, "⚠️ لا يوجد عملاء مضافين بعد. يجب إضافة عميل أولاً باستخدام الأمر 'إضافة عميل'.");
+                    exit;
                 }
+
+                $keyboard = [];
+                foreach ($customers as $cust) {
+                    $keyboard[] = [['text' => $cust['first_name'] . ' ' . $cust['last_name'], 'callback_data' => 'select_customer_' . $cust['customer_id']]];
+                }
+                $keyboard[] = [['text' => '❌ إلغاء', 'callback_data' => 'cancel_invoice']]; // We defined /cancel, but a button is good too
+
+                setConversationState($user_id, 'awaiting_invoice_customer_id');
+                sendMessage($chat_id, "🧾 لمن تريد إصدار هذه الفاتورة؟ (اختر من القائمة)", ['inline_keyboard' => $keyboard]);
+            
             } else {
-                sendMessage($chat_id, "❓ أمر غير معروف.");
+                sendMessage($chat_id, "❓ أمر غير مفهوم. الأوامر المتاحة:\n- <code>إضافة عميل</code>\n- <code>إضافة فاتورة جديدة</code>\n- <code>/cancel</code> لإلغاء أي عملية.");
             }
             break;
 
-        case 'awaiting_customer_fname':
-            savePendingData($db_connection, $user_id, ['fname' => $user_text]);
-            updateUserState($db_connection, $user_id, 'awaiting_customer_lname');
-            sendMessage($chat_id, "أدخل <b>الاسم الأخير</b>:");
+        // --- Customer adding states ---
+        case 'awaiting_customer_first_name':
+            $pending_data = [];
+            $pending_data['customer_first_name'] = $user_text;
+            setPendingData($user_id, $pending_data);
+            setConversationState($user_id, 'awaiting_customer_last_name');
+            sendMessage($chat_id, "📛 ممتاز. الآن، من فضلك أدخل <b>اسم العائلة</b> للعميل:");
             break;
 
-        case 'awaiting_customer_lname':
-            $data = getPendingData($db_connection, $user_id);
-            $data['lname'] = $user_text;
-            savePendingData($db_connection, $user_id, $data);
-            updateUserState($db_connection, $user_id, 'awaiting_customer_email');
-            sendMessage($chat_id, "أدخل <b>البريد الإلكتروني</b> (أو 'لا'):");
+        case 'awaiting_customer_last_name':
+            $pending_data = getPendingData($user_id);
+            $pending_data['customer_last_name'] = $user_text;
+            setPendingData($user_id, $pending_data);
+            setConversationState($user_id, 'awaiting_customer_email');
+            sendMessage($chat_id, "📧 جيد. أخيرًا، من فضلك أدخل <b>البريد الإلكتروني</b> للعميل (أو اكتب 'لا' لتخطيه):");
             break;
 
         case 'awaiting_customer_email':
-            $data = getPendingData($db_connection, $user_id);
-            $email = ($user_text === 'لا') ? null : $user_text;
-            
+            $pending_data = getPendingData($user_id);
+            $email = (strtolower($user_text) === 'لا' || $user_text === '-') ? null : $user_text;
+
+            // Add customer to DB
             $stmt = $db_connection->prepare("INSERT INTO customers (user_id, first_name, last_name, email) VALUES (?, ?, ?, ?)");
-            $stmt->execute([$user_id, $data['fname'], $data['lname'], $email]);
-            
-            updateUserState($db_connection, $user_id, 'idle');
-            clearPendingData($db_connection, $user_id);
-            sendMessage($chat_id, "✅ تم إضافة العميل بنجاح!");
+            $stmt->execute([
+                $user_id,
+                $pending_data['customer_first_name'] ?? 'N/A',
+                $pending_data['customer_last_name'] ?? 'N/A',
+                $email
+            ]);
+
+            clearPendingData($user_id);
+            setConversationState($user_id, 'idle');
+            sendMessage($chat_id, "✅ تم إضافة العميل <b>" . htmlspecialchars($pending_data['customer_first_name']) . " " . htmlspecialchars($pending_data['customer_last_name']) . "</b> بنجاح!");
+            break;
+
+        // --- Invoice adding states ---
+        case 'awaiting_invoice_customer_id':
+            // This state waits for a *callback query* (button press). 
+            // If user types text instead, we prompt them to use the buttons.
+            sendMessage($chat_id, "⚠️ يرجى الضغط على أحد أزرار العملاء أعلاه. أو أرسل /cancel للبدء من جديد.");
             break;
 
         case 'awaiting_invoice_amount':
-            if (!is_numeric($user_text)) {
-                sendMessage($chat_id, "❌ الرجاء إدخال رقم صحيح.");
+            if (!is_numeric($user_text) || $user_text <= 0) {
+                sendMessage($chat_id, "❌ المبلغ غير صالح. يرجى إدخال رقم صحيح (مثل 150.50):");
                 break;
             }
-            $data = getPendingData($db_connection, $user_id);
-            $data['amount'] = $user_text;
-            savePendingData($db_connection, $user_id, $data);
-            updateUserState($db_connection, $user_id, 'awaiting_invoice_date');
-            sendMessage($chat_id, "📅 أدخل تاريخ الاستحقاق (YYYY-MM-DD):");
+            $pending_data = getPendingData($user_id);
+            $pending_data['invoice_amount'] = $user_text;
+            setPendingData($user_id, $pending_data);
+            setConversationState($user_id, 'awaiting_invoice_due_date');
+            sendMessage($chat_id, "📅 جيد جدًا. أخيرًا، من فضلك أدخل <b>تاريخ الاستحقاق</b> (بالصيغة YYYY-MM-DD، مثال: 2025-12-31):");
             break;
 
-        case 'awaiting_invoice_date':
-            $data = getPendingData($db_connection, $user_id);
+        case 'awaiting_invoice_due_date':
+            if (!validateDateYMD($user_text)) {
+                sendMessage($chat_id, "❌ صيغة التاريخ غير صحيحة. يرجى إدخاله بالصيغة YYYY-MM-DD (مثل 2025-12-31).");
+                break;
+            }
+
+            $pending_data = getPendingData($user_id);
+            $customer_id = $pending_data['invoice_customer_id'] ?? null;
+            $amount = $pending_data['invoice_amount'] ?? null;
+            $due_date = $user_text;
+
+            if (!$customer_id || !$amount) {
+                // Data mismatch, reset state
+                clearPendingData($user_id);
+                setConversationState($user_id, 'idle');
+                sendMessage($chat_id, "⚠️ حدث خطأ في البيانات المؤقتة. يرجى البدء من جديد.");
+                break;
+            }
+
+            // Add invoice to DB
             $stmt = $db_connection->prepare("INSERT INTO invoices (user_id, customer_id, amount, due_date, status) VALUES (?, ?, ?, ?, 'pending')");
-            $stmt->execute([$user_id, $data['invoice_customer_id'], $data['amount'], $user_text]);
-            
-            updateUserState($db_connection, $user_id, 'idle');
-            clearPendingData($db_connection, $user_id);
-            sendMessage($chat_id, "✅ تم إنشاء الفاتورة بنجاح!");
+            $stmt->execute([$user_id, $customer_id, $amount, $due_date]);
+
+            clearPendingData($user_id);
+            setConversationState($user_id, 'idle');
+            sendMessage($chat_id, "✅ تمت إضافة الفاتورة بنجاح!");
             break;
-    }
+
+        default:
+            logError("Unknown state: $user_state for user_id: $user_id");
+            setConversationState($user_id, 'idle');
+            sendMessage($chat_id, "⚠️ حدث خطأ في حالة المحادثة. تم إعادة تعيينك. أرسل /start للمتابعة.");
+            break;
+    } // End of switch($user_state)
+
+} catch (PDOException $e) {
+    logError("Webhook PDO Error: " . $e->getMessage() . " (Input: $input)");
+    sendMessage($chat_id, "⚠️ حدث خطأ أثناء معالجة طلبك المتعلق بقاعدة البيانات. تم إبلاغ المسؤولين.");
 
 } catch (Exception $e) {
-    // Error logging if needed
+    logError("Webhook General Error: " . $e->getMessage() . " (Input: $input)");
+    // Don't send technical error details to the user
+    sendMessage($chat_id, "⚠️ حدث خطأ عام في النظام. يرجى المحاولة لاحقًا.");
 }
-```
 
-4.  اضغط **`Commit changes`**.
-
-### ## الخطوة الثانية: تحديث السيرفر
-
-اذهب إلى الـ Terminal ونفذ الأوامر المعتادة:
-```bash
-cd ~/bizflow
-git pull
-sudo rm -rf /var/www/html/*
-sudo cp -r * /var/www/html/
-sudo chown -R www-data:www-data /var/www/html
-```
-
-### ## الاختبار النهائي
-
-اذهب إلى البوت وأرسل `/start`. سيجيبك فورًا!
+// Always respond 200 to Telegram to prevent retry loops
+http_response_code(200); 
+?> 
