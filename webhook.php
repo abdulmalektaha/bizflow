@@ -6,10 +6,7 @@
 // إنه يبدأ الجلسة session_start() ويعرّف $db_connection و logError()
 require_once 'config.php'; 
 
-// !! الإصلاح الهام: تعريف المتغير الذي تستخدمه الدوال !!
-// هذا يقرأ الثابت من config.php ويضعه في متغير
-// $BOT_TOKEN = defined('TELEGRAM_BOT_TOKEN') ? TELEGRAM_BOT_TOKEN : '';
-// ^^ [تحديث] لا نحتاج هذا السطر إذا كنا سنستخدم الثابت مباشرة ^^
+// !! [تم الإصلاح] لا يوجد session_start() مكرر هنا !!
 
 if (!defined('TELEGRAM_BOT_TOKEN')) {
     logError("CRITICAL: TELEGRAM_BOT_TOKEN is not defined in config.php");
@@ -193,6 +190,10 @@ try {
             $customer_name = $customer ? ($customer['first_name'] . ' ' . $customer['last_name']) : "العميل #$customer_id";
 
             sendMessage($chat_id, "💰 ممتاز (تم اختيار العميل: " . htmlspecialchars($customer_name) . ").\nالآن، من فضلك أدخل مبلغ الفاتورة (أرقام فقط):");
+        
+        } elseif ($callback_data === 'cancel_invoice') { // Handle cancel button
+            updateUserState($db_connection, $user_id, 'idle');
+            sendMessage($chat_id, "تم إلغاء إضافة الفاتورة.");
         }
         exit; // End callback processing
     }
