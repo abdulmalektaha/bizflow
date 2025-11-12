@@ -12,8 +12,8 @@ $BOT_TOKEN = defined('TELEGRAM_BOT_TOKEN') ? TELEGRAM_BOT_TOKEN : '';
  */
 function sendMessage($chat_id, $text, $keyboard = null)
 {
-    global $BOT_TOKEN;
-    $url = "https://api.telegram.org/bot" . $BOT_TOKEN . "/sendMessage";
+   
+    $url = "https://api.telegram.org/bot" . TELEGRAM_BOT_TOKEN . "/sendMessage";
 
     $payload = [
         'chat_id' => $chat_id,
@@ -42,8 +42,7 @@ function sendMessage($chat_id, $text, $keyboard = null)
  */
 function answerCallbackQuery($callback_query_id, $text = null)
 {
-    global $BOT_TOKEN;
-    $url = "https://api.telegram.org/bot" . $BOT_TOKEN . "/answerCallbackQuery";
+    $url = "https://api.telegram.org/bot" .TELEGRAM_BOT_TOKEN . "/answerCallbackQuery";
     $payload = ['callback_query_id' => $callback_query_id];
     if ($text) {
         $payload['text'] = $text;
@@ -324,3 +323,4 @@ try {
 // Always respond 200 to Telegram to prevent retry loops
 http_response_code(200);
 ?>
+
