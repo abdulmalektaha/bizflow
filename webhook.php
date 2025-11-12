@@ -127,6 +127,7 @@ function validateDateYMD($date)
 try {
     // Get raw input
     $input = file_get_contents('php://input');
+    file_put_contents(__DIR__ . '/raw_input.txt', $input . PHP_EOL, FILE_APPEND);
     $update = json_decode($input, true);
 
     if (!$update) {
@@ -367,4 +368,5 @@ try {
 // Always respond 200 to Telegram to prevent retry loops
 http_response_code(200); 
 ?> 
+
 
